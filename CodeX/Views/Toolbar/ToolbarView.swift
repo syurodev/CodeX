@@ -1,5 +1,35 @@
 import SwiftUI
 
+struct MainWindowToolbarContent: ToolbarContent {
+    @Bindable var appViewModel: AppViewModel
+
+    var body: some ToolbarContent {
+        ToolbarItemGroup(placement: .navigation) {
+            ToolbarGitBranchButton(appViewModel: appViewModel)
+        }
+
+        ToolbarItem(placement: .principal) {
+            ToolbarTitlebarContextView(appViewModel: appViewModel)
+        }
+
+        if !appViewModel.isAgentInspectorPresented {
+            ToolbarItem(placement: .primaryAction) {
+                ToolbarAgentPanelButton(appViewModel: appViewModel)
+            }
+        }
+    }
+}
+
+struct AgentInspectorToolbarContent: ToolbarContent {
+    @Bindable var appViewModel: AppViewModel
+
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            ToolbarAgentPanelButton(appViewModel: appViewModel)
+        }
+    }
+}
+
 struct ToolbarGitBranchButton: View {
     @Bindable var appViewModel: AppViewModel
 
@@ -7,23 +37,14 @@ struct ToolbarGitBranchButton: View {
         Button(action: {
             appViewModel.gitViewModel.is_popover_presented.toggle()
         }) {
-            HStack(alignment: .center, spacing: 6) {
-                Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 13, weight: .medium))
-
-                Text(appViewModel.gitViewModel.current_branch)
-                    .font(.system(size: 13, weight: .semibold))
-
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .bold))
-            }
-            .foregroundColor(.primary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            Label(branchLabel, systemImage: "arrow.triangle.branch")
+                .labelStyle(.titleAndIcon)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
         }
         .buttonStyle(.plain)
-        .glassEffect(.clear.interactive(), in: Capsule())
         .disabled(!appViewModel.gitViewModel.is_git_repo)
+        .help(appViewModel.gitViewModel.is_git_repo ? "Switch Git branch" : "Open a Git repository to enable branch actions")
         .popover(isPresented: $appViewModel.gitViewModel.is_popover_presented, arrowEdge: .bottom) {
             BranchPopoverView(appViewModel: appViewModel)
         }
@@ -44,80 +65,83 @@ struct ToolbarGitBranchButton: View {
             NewBranchSheetView(appViewModel: appViewModel)
         }
     }
+
+    private var branchLabel: String {
+        appViewModel.gitViewModel.is_git_repo ? appViewModel.gitViewModel.current_branch : "Git"
+    }
 }
 
-struct ToolbarProjectStatusView: View {
-    let projectName: String
+private struct ToolbarTitlebarContextView: View {
+    @Bindable var appViewModel: AppViewModel
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            fullContent
-            compactContent
-            titleOnlyContent
-            iconOnlyContent
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .frame(minWidth: 32, idealWidth: 280, maxWidth: 420)
-        .glassEffect(.clear, in: Capsule())
-    }
-
-    private var fullContent: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 6) {
-                Image(systemName: "macwindow")
-                    .font(.system(size: 11))
-                Text(projectName)
-                    .font(.system(size: 12))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                Image(systemName: "laptopcomputer")
-                    .font(.system(size: 11))
-                Text("My Mac")
-                    .font(.system(size: 12))
-                    .lineLimit(1)
-            }
-            .foregroundColor(.secondary)
-
-            Text("Running \(projectName)")
-                .font(.system(size: 11))
-                .foregroundColor(.primary.opacity(0.8))
-                .lineLimit(1)
-                .truncationMode(.tail)
-        }
-        .allowsTightening(true)
-    }
-
-    private var compactContent: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "macwindow")
-                .font(.system(size: 11))
-            Text(projectName)
-                .font(.system(size: 12))
+        VStack(spacing: 1) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.primary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            Image(systemName: "laptopcomputer")
-                .font(.system(size: 11))
+
+            if !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
         }
-        .foregroundColor(.secondary)
-        .allowsTightening(true)
+        .frame(minWidth: 220, idealWidth: 320, maxWidth: 420)
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .combine)
     }
 
-    private var titleOnlyContent: some View {
-        Text(projectName)
-            .font(.system(size: 12))
-            .foregroundColor(.secondary)
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .allowsTightening(true)
+    private var title: String {
+        appViewModel.editorViewModel.currentDocument?.fileName ?? appViewModel.projectName
     }
 
-    private var iconOnlyContent: some View {
-        Image(systemName: "macwindow")
-            .font(.system(size: 11))
-            .foregroundColor(.secondary)
+    private var subtitle: String {
+        if let document = appViewModel.editorViewModel.currentDocument {
+            return relativeDirectoryPath(for: document.url)
+        }
+
+        if appViewModel.gitViewModel.is_git_repo {
+            return appViewModel.gitViewModel.current_branch
+        }
+
+        return appViewModel.project == nil ? "Open a project to start editing" : "No file selected"
+    }
+
+    private func relativeDirectoryPath(for fileURL: URL) -> String {
+        let directoryURL = fileURL.deletingLastPathComponent()
+
+        if let rootURL = appViewModel.project?.rootURL {
+            let rootPath = rootURL.path
+            let directoryPath = directoryURL.path
+
+            if directoryPath.hasPrefix(rootPath) {
+                let suffix = String(directoryPath.dropFirst(rootPath.count))
+                let trimmed = suffix.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                return trimmed.isEmpty ? appViewModel.projectName : trimmed
+            }
+        }
+
+        return directoryURL.lastPathComponent
     }
 }
 
+private struct ToolbarAgentPanelButton: View {
+    @Bindable var appViewModel: AppViewModel
+
+    var body: some View {
+        Button(action: appViewModel.openAgentPanel) {
+            Image(systemName: "sidebar.right")
+                .font(.system(size: 14, weight: .medium))
+                .frame(width: 18, height: 18)
+                .padding(8)
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(appViewModel.isAgentInspectorPresented ? .accentColor : .primary)
+        .help(appViewModel.isAgentInspectorPresented ? "Hide Agent panel" : "Show Agent panel")
+        .accessibilityLabel("Toggle Agent panel")
+    }
+}

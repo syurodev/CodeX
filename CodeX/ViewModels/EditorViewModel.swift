@@ -68,7 +68,7 @@ class EditorViewModel {
                 tabWidth: settings.tab_width
             ),
             layout: .init(
-                contentInsets: NSEdgeInsets(top: 125, left: 0, bottom: 0, right: 0)
+                contentInsets: NSEdgeInsets(top: 8, left: 0, bottom: 0, right: 0)
             ),
             peripherals: .init(
                 showMinimap: settings.show_minimap
