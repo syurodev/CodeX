@@ -16,6 +16,8 @@ extension SourceEditor {
         private weak var controller: TextViewController?
         var isUpdatingFromRepresentable: Bool = false
         var isUpdateFromTextView: Bool = false
+        var lastAppliedScrollPosition: CGPoint?
+        var lastAppliedCursorPositions: [CursorPosition]?
         var text: TextAPI
         @Binding var editorState: SourceEditorState
 
@@ -26,6 +28,8 @@ extension SourceEditor {
         init(text: TextAPI, editorState: Binding<SourceEditorState>, highlightProviders: [any HighlightProviding]?) {
             self.text = text
             self._editorState = editorState
+            self.lastAppliedScrollPosition = editorState.wrappedValue.scrollPosition
+            self.lastAppliedCursorPositions = editorState.wrappedValue.cursorPositions
             self.highlightProviders = highlightProviders ?? [TreeSitterClient()]
             super.init()
         }
@@ -133,6 +137,7 @@ extension SourceEditor {
             guard let controller = notification.object as? TextViewController else {
                 return
             }
+            lastAppliedCursorPositions = controller.cursorPositions
             updateState { $0.cursorPositions = controller.cursorPositions }
         }
 
@@ -141,6 +146,7 @@ extension SourceEditor {
                 return
             }
             let currentPosition = controller.scrollView.contentView.bounds.origin
+            lastAppliedScrollPosition = currentPosition
             if editorState.scrollPosition != currentPosition {
                 updateState { $0.scrollPosition = currentPosition }
             }

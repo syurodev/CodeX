@@ -72,6 +72,7 @@ extension TextViewController {
         setUpOberservers()
 
         textView.updateFrameIfNeeded()
+        updateHorizontalScrollRangeIfNeeded(reason: "loadView")
 
         if let localEventMonitor = self.localEventMonitor {
             NSEvent.removeMonitor(localEventMonitor)
@@ -116,9 +117,10 @@ extension TextViewController {
             object: scrollView.contentView,
             queue: .main
         ) { [weak self] notification in
-            guard let clipView = notification.object as? NSClipView else { return }
-            self?.gutterView.needsDisplay = true
-            self?.minimapXConstraint?.constant = clipView.bounds.origin.x
+            guard let self, let clipView = notification.object as? NSClipView else { return }
+            self.gutterView.needsDisplay = true
+            self.minimapXConstraint?.constant = clipView.bounds.origin.x
+            self.updateHorizontalScrollRangeIfNeeded(reason: "scrollViewBoundsDidChange")
             NotificationCenter.default.post(name: Self.scrollPositionDidUpdateNotification, object: self)
         }
     }
@@ -129,9 +131,12 @@ extension TextViewController {
             object: scrollView.contentView,
             queue: .main
         ) { [weak self] _ in
-            self?.gutterView.needsDisplay = true
-            self?.emphasisManager?.removeEmphases(for: EmphasisGroup.brackets)
-            self?.updateTextInsets()
+            guard let self else { return }
+            self.gutterView.needsDisplay = true
+            self.emphasisManager?.removeEmphases(for: EmphasisGroup.brackets)
+            self.updateTextInsets()
+            self.textView.updateFrameIfNeeded()
+            self.updateHorizontalScrollRangeIfNeeded(reason: "scrollViewFrameDidChange")
             NotificationCenter.default.post(name: Self.scrollPositionDidUpdateNotification, object: self)
         }
     }
@@ -149,6 +154,7 @@ extension TextViewController {
             self.gutterView.foldingRibbon.needsDisplay = true
             self.reformattingGuideView?.updatePosition(in: self)
             self.scrollView.needsLayout = true
+            self.updateHorizontalScrollRangeIfNeeded(reason: "textViewFrameDidChange")
         }
     }
 

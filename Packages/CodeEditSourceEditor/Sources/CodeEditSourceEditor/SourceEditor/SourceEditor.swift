@@ -107,9 +107,9 @@ public struct SourceEditor: NSViewControllerRepresentable {
         )
         switch text {
         case .binding(let binding):
-            controller.textView.setText(binding.wrappedValue)
+            controller.setText(binding.wrappedValue)
         case .storage(let textStorage):
-            controller.textView.setTextStorage(textStorage)
+            controller.setTextStorage(textStorage)
         }
         if controller.textView == nil {
             controller.loadView()
@@ -140,7 +140,7 @@ public struct SourceEditor: NSViewControllerRepresentable {
             context.coordinator.isUpdateFromTextView = false
         } else {
             context.coordinator.isUpdatingFromRepresentable = true
-            updateControllerWithState(state, controller: controller)
+            updateControllerWithState(state, controller: controller, coordinator: context.coordinator)
             context.coordinator.isUpdatingFromRepresentable = false
         }
 
@@ -160,18 +160,43 @@ public struct SourceEditor: NSViewControllerRepresentable {
         return
     }
 
-    private func updateControllerWithState(_ state: SourceEditorState, controller: TextViewController) {
-        if let cursorPositions = state.cursorPositions, cursorPositions != controller.cursorPositions {
+    private func updateControllerWithState(
+        _ state: SourceEditorState,
+        controller: TextViewController,
+        coordinator: Coordinator
+    ) {
+        let normalizedStateCursorPositions = normalizeCursorPositions(state.cursorPositions, controller: controller)
+        if let cursorPositions = normalizedStateCursorPositions,
+           cursorPositions != controller.cursorPositions,
+           cursorPositions != coordinator.lastAppliedCursorPositions {
+#if DEBUG
+            print(
+                "🔎 [HorizontalScrollDebug] reason=externalCursorApply " +
+                "incomingCount=\(cursorPositions.count) currentCount=\(controller.cursorPositions.count)"
+            )
+#endif
             controller.setCursorPositions(cursorPositions, scrollToVisible: true)
         }
+        coordinator.lastAppliedCursorPositions = normalizedStateCursorPositions
 
         let scrollView = controller.scrollView
-        if let scrollPosition = state.scrollPosition, scrollPosition != scrollView?.contentView.bounds.origin {
+        if let scrollPosition = state.scrollPosition,
+           scrollPosition != coordinator.lastAppliedScrollPosition,
+           scrollPosition != scrollView?.contentView.bounds.origin {
+#if DEBUG
+            let currentOrigin = scrollView?.contentView.bounds.origin ?? .zero
+            print(
+                "🔎 [HorizontalScrollDebug] reason=externalStateScrollApply " +
+                "stateX=\(scrollPosition.x) stateY=\(scrollPosition.y) " +
+                "currentX=\(currentOrigin.x) currentY=\(currentOrigin.y)"
+            )
+#endif
             controller.scrollView.scroll(controller.scrollView.contentView, to: scrollPosition)
             controller.scrollView.reflectScrolledClipView(controller.scrollView.contentView)
             controller.gutterView.needsDisplay = true
             NotificationCenter.default.post(name: NSView.frameDidChangeNotification, object: controller.textView)
         }
+        coordinator.lastAppliedScrollPosition = state.scrollPosition
 
         if let findText = state.findText, findText != controller.findViewController?.viewModel.findText {
             controller.findViewController?.viewModel.findText = findText
@@ -193,6 +218,17 @@ public struct SourceEditor: NSViewControllerRepresentable {
                 }
             }
         }
+    }
+
+    private func normalizeCursorPositions(
+        _ cursorPositions: [CursorPosition]?,
+        controller: TextViewController
+    ) -> [CursorPosition]? {
+        guard let cursorPositions else {
+            return nil
+        }
+
+        return cursorPositions.map { controller.resolveCursorPosition($0) ?? $0 }
     }
 
     private func updateHighlighting(_ controller: TextViewController, coordinator: Coordinator) {

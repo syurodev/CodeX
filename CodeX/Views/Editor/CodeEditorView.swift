@@ -6,6 +6,12 @@ struct CodeEditorView: View {
     @Environment(AppViewModel.self) private var appViewModel
     @Environment(\.colorScheme) private var colorScheme
     @Bindable var viewModel: EditorViewModel
+    let bottomContentInset: CGFloat
+
+    init(viewModel: EditorViewModel, bottomContentInset: CGFloat = 0) {
+        self.viewModel = viewModel
+        self.bottomContentInset = bottomContentInset
+    }
 
     var body: some View {
         if viewModel.openDocuments.isEmpty {
@@ -15,7 +21,11 @@ struct CodeEditorView: View {
                 ForEach(viewModel.openDocuments) { document in
                     let isActive = document.id == viewModel.currentDocumentID
                     
-                    SingleCodeEditorView(document: document, viewModel: viewModel)
+                    SingleCodeEditorView(
+                        document: document,
+                        viewModel: viewModel,
+                        bottomContentInset: bottomContentInset
+                    )
                         .opacity(isActive ? 1 : 0)
                         .allowsHitTesting(isActive)
                 }
@@ -29,6 +39,7 @@ struct CodeEditorView: View {
 struct SingleCodeEditorView: View {
     @Bindable var document: EditorDocument
     var viewModel: EditorViewModel
+    let bottomContentInset: CGFloat
     @Environment(\.colorScheme) private var colorScheme
     
     var body: some View {
@@ -48,14 +59,22 @@ struct SingleCodeEditorView: View {
             }
         )
 
-        SourceEditor(
-            textBinding,
-            language: document.language,
-            configuration: viewModel.editorConfiguration(for: colorScheme),
-            state: stateBinding,
-            completionDelegate: viewModel,
-            jumpToDefinitionDelegate: viewModel
-        )
+        GeometryReader { proxy in
+            SourceEditor(
+                textBinding,
+                language: document.language,
+                configuration: viewModel.editorConfiguration(
+                    for: colorScheme,
+                    topContentInset: proxy.safeAreaInsets.top + 8,
+                    bottomContentInset: proxy.safeAreaInsets.bottom + bottomContentInset
+                ),
+                state: stateBinding,
+                completionDelegate: viewModel,
+                jumpToDefinitionDelegate: viewModel
+            )
+            .ignoresSafeArea(.container, edges: .top)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 }
 

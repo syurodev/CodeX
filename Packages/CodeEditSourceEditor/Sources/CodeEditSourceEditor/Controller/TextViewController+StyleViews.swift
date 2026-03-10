@@ -28,7 +28,9 @@ extension TextViewController {
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.contentView.postsFrameChangedNotifications = true
         scrollView.hasVerticalScroller = true
-        scrollView.scrollerStyle = .overlay
+        scrollView.hasHorizontalScroller = !wrapLines
+        scrollView.autohidesScrollers = wrapLines
+        scrollView.scrollerStyle = wrapLines ? .overlay : .legacy
     }
 
     package func styleMinimapView() {

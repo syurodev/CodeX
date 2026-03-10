@@ -29,6 +29,10 @@ extension TextViewController: TextViewDelegate {
         }
 
         suggestionTriggerModel.textView(textView, didReplaceContentsIn: range, with: string)
+        DispatchQueue.main.async { [weak self] in
+            self?.shouldRecalculateMinimumNonWrappingWidth = true
+            self?.updateHorizontalScrollRangeIfNeeded(reason: "textDidChange")
+        }
     }
 
     public func textView(_ textView: TextView, shouldReplaceContentsIn range: NSRange, with string: String) -> Bool {

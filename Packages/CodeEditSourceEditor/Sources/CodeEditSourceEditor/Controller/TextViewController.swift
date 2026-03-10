@@ -193,8 +193,9 @@ public class TextViewController: NSViewController {
     /// The trailing inset for the editor. Grows when line wrapping is disabled or when the minimap is shown.
     var textViewTrailingInset: CGFloat {
         // See https://github.com/CodeEditApp/CodeEditTextView/issues/66
-        // wrapLines ? 1 : 48
-        (minimapView?.isHidden ?? false) ? 0 : (minimapView?.frame.width ?? 0.0)
+        let wrapInset: CGFloat = wrapLines ? 1 : 48
+        let minimapInset = (minimapView?.isHidden ?? false) ? 0 : (minimapView?.frame.width ?? 0.0)
+        return max(wrapInset, minimapInset)
     }
 
     var textViewInsets: HorizontalEdgeInsets {
@@ -202,6 +203,110 @@ public class TextViewController: NSViewController {
             left: showGutter ? gutterView.frame.width : 0.0,
             right: textViewTrailingInset
         )
+    }
+
+    var sourceEditorTextView: SourceEditorTextView? {
+        textView as? SourceEditorTextView
+    }
+
+    var shouldRecalculateMinimumNonWrappingWidth = true
+
+    func updateHorizontalScrollRangeIfNeeded(reason: String) {
+        guard !wrapLines else {
+            sourceEditorTextView?.minimumNonWrappingWidth = 0
+            shouldRecalculateMinimumNonWrappingWidth = true
+            logHorizontalScrollDebug(
+                reason: reason,
+                estimatedWidth: textView.layoutManager.estimatedWidth(),
+                visibleFragmentMaxX: 0,
+                measuredWidth: 0,
+                layoutRightInset: textView.layoutManager.edgeInsets.right,
+                textRightInset: textView.textInsets.right,
+                targetWidth: textView.frame.width,
+                didExpand: false,
+                note: "skip: wrapLines=true"
+            )
+            return
+        }
+
+        let layoutRightInset = textView.layoutManager.edgeInsets.right
+        let visibleFragmentMaxX = textView.subviews
+            .compactMap { $0 as? LineFragmentView }
+            .map(\.frame.maxX)
+            .max() ?? 0.0
+        let measuredWidth = visibleFragmentMaxX > 0 ? visibleFragmentMaxX + layoutRightInset : 0.0
+        let targetWidth = max(scrollView.contentSize.width, textView.layoutManager.estimatedWidth(), measuredWidth)
+        let previousMinimumWidth = sourceEditorTextView?.minimumNonWrappingWidth ?? 0
+        let shouldRecalculateMinimumWidth = shouldRecalculateMinimumNonWrappingWidth
+        let appliedMinimumWidth = shouldRecalculateMinimumWidth
+            ? targetWidth
+            : max(previousMinimumWidth, targetWidth)
+        sourceEditorTextView?.minimumNonWrappingWidth = appliedMinimumWidth
+        shouldRecalculateMinimumNonWrappingWidth = false
+        let previousFrameWidth = textView.frame.width
+        let shouldAdjustFrameWidth = shouldRecalculateMinimumWidth
+            ? appliedMinimumWidth != previousFrameWidth
+            : appliedMinimumWidth > previousFrameWidth
+
+        guard shouldAdjustFrameWidth else {
+            logHorizontalScrollDebug(
+                reason: reason,
+                estimatedWidth: textView.layoutManager.estimatedWidth(),
+                visibleFragmentMaxX: visibleFragmentMaxX,
+                measuredWidth: measuredWidth,
+                layoutRightInset: layoutRightInset,
+                textRightInset: textView.textInsets.right,
+                targetWidth: targetWidth,
+                didExpand: false,
+                note: shouldRecalculateMinimumWidth
+                    ? "recalculated min width"
+                    : (appliedMinimumWidth > targetWidth ? "preserved monotonic min width" : "no expansion needed")
+            )
+            return
+        }
+
+        textView.frame.size.width = appliedMinimumWidth
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        logHorizontalScrollDebug(
+            reason: reason,
+            estimatedWidth: textView.layoutManager.estimatedWidth(),
+            visibleFragmentMaxX: visibleFragmentMaxX,
+            measuredWidth: measuredWidth,
+            layoutRightInset: layoutRightInset,
+            textRightInset: textView.textInsets.right,
+            targetWidth: targetWidth,
+            didExpand: appliedMinimumWidth > previousFrameWidth,
+            note: shouldRecalculateMinimumWidth
+                ? "applied recalculated min width"
+                : (appliedMinimumWidth > targetWidth ? "preserved monotonic min width" : nil)
+        )
+    }
+
+    private func logHorizontalScrollDebug(
+        reason: String,
+        estimatedWidth: CGFloat,
+        visibleFragmentMaxX: CGFloat,
+        measuredWidth: CGFloat,
+        layoutRightInset: CGFloat,
+        textRightInset: CGFloat,
+        targetWidth: CGFloat,
+        didExpand: Bool,
+        note: String? = nil
+    ) {
+#if DEBUG
+        let clipBounds = scrollView.contentView.bounds
+        let minimumNonWrappingWidth = sourceEditorTextView?.minimumNonWrappingWidth ?? 0
+        let noteSuffix = note.map { " note=\($0)" } ?? ""
+        print(
+            "🔎 [HorizontalScrollDebug] reason=\(reason) wrap=\(wrapLines) " +
+            "contentWidth=\(scrollView.contentSize.width) textFrameWidth=\(textView.frame.width) " +
+            "estimatedWidth=\(estimatedWidth) fragmentMaxX=\(visibleFragmentMaxX) " +
+            "measuredWidth=\(measuredWidth) layoutRightInset=\(layoutRightInset) " +
+            "textRightInset=\(textRightInset) targetWidth=\(targetWidth) minNonWrapWidth=\(minimumNonWrappingWidth) " +
+            "clipOriginX=\(clipBounds.origin.x) clipWidth=\(clipBounds.width) " +
+            "subviews=\(textView.subviews.count) expanded=\(didExpand)\(noteSuffix)"
+        )
+#endif
     }
 
     // MARK: Init
@@ -267,9 +372,21 @@ public class TextViewController: NSViewController {
     /// Set the contents of the editor.
     /// - Parameter text: The new contents of the editor.
     public func setText(_ text: String) {
+        shouldRecalculateMinimumNonWrappingWidth = true
         self.textView.setText(text)
         self.setUpHighlighter()
-        self.gutterView.setNeedsDisplay(self.gutterView.frame)
+        if let gutterView {
+            gutterView.setNeedsDisplay(gutterView.frame)
+        }
+    }
+
+    public func setTextStorage(_ textStorage: NSTextStorage) {
+        shouldRecalculateMinimumNonWrappingWidth = true
+        self.textView.setTextStorage(textStorage)
+        self.setUpHighlighter()
+        if let gutterView {
+            gutterView.setNeedsDisplay(gutterView.frame)
+        }
     }
 
     deinit {

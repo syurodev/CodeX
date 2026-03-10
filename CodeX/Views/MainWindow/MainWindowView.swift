@@ -34,7 +34,16 @@ struct MainWindowView: View {
                 }
                 .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 400)
             } detail: {
-                CodeEditorView(viewModel: appVM.editorViewModel)
+                CodeEditorView(
+                    viewModel: appVM.editorViewModel,
+                    bottomContentInset: StatusBarView.height
+                )
+                    .overlay(alignment: .bottom) {
+                        StatusBarView(
+                            document: appVM.editorViewModel.currentDocument,
+                            cursorPosition: appVM.editorViewModel.cursorPosition
+                        )
+                    }
             }
             .frame(minWidth: 500)
             .inspector(isPresented: $appVM.isAgentInspectorPresented) {
@@ -47,13 +56,14 @@ struct MainWindowView: View {
                         }
                     }
             }
-
-            StatusBarView(
-                document: appVM.editorViewModel.currentDocument,
-                cursorPosition: appVM.editorViewModel.cursorPosition
-            )
         }
         .frame(minWidth: 800, minHeight: 500)
+        .background {
+            WindowTitlebarContent(id: "MainWindowTitlebarConfigurator") {
+                Color.clear
+                    .frame(height: 0)
+            }
+        }
         .navigationTitle(windowTitle(for: appVM))
         .navigationSubtitle(windowSubtitle(for: appVM))
         .toolbar {

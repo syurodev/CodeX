@@ -152,6 +152,22 @@ final class TextViewControllerTests: XCTestCase {
         XCTAssertEqual(controller.gutterView.frame.origin.y, -10 - findModel.viewModel.panelHeight)
     }
 
+    func test_nonWrappingEditorUsesTrailingInsetAndHorizontalScroller() throws {
+        let scrollView = try XCTUnwrap(controller.scrollView)
+
+        controller.configuration.peripherals.showMinimap = false
+        XCTAssertEqual(controller.textViewTrailingInset, 1)
+        XCTAssertEqual(controller.textViewInsets.right, 1)
+        XCTAssertFalse(scrollView.hasHorizontalScroller)
+
+        controller.configuration.appearance.wrapLines = false
+
+        XCTAssertEqual(controller.textViewTrailingInset, 48)
+        XCTAssertEqual(controller.textViewInsets.right, 48)
+        XCTAssertEqual(controller.textView.textInsets.right, 48)
+        XCTAssertTrue(scrollView.hasHorizontalScroller)
+    }
+
     func test_editorOverScroll_ZeroCondition() throws {
         let scrollView = try XCTUnwrap(controller.scrollView)
         scrollView.frame = .zero
@@ -450,7 +466,7 @@ final class TextViewControllerTests: XCTestCase {
 
         controller.configuration.peripherals.showMinimap = false
         XCTAssertTrue(controller.minimapView.isHidden)
-        XCTAssertEqual(controller.textViewInsets.right, 0)
+        XCTAssertEqual(controller.textViewInsets.right, 1)
 
         controller.configuration.peripherals.showMinimap = true
         XCTAssertFalse(controller.minimapView.isHidden)

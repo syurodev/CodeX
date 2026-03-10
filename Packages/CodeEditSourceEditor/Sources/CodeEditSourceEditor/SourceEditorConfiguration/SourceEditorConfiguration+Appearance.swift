@@ -108,8 +108,10 @@ extension SourceEditorConfiguration {
             if oldConfig?.wrapLines != wrapLines {
                 controller.textView.layoutManager.wrapLines = wrapLines
                 controller.minimapView.layoutManager?.wrapLines = wrapLines
-                controller.scrollView.hasHorizontalScroller = !wrapLines
+                controller.styleScrollView()
                 controller.updateTextInsets()
+                controller.textView.updateFrameIfNeeded()
+                controller.updateHorizontalScrollRangeIfNeeded(reason: "wrapLinesChanged")
             }
 
             // useThemeBackground isn't needed

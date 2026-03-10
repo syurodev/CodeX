@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		297E57922F583AA7005336FB /* CodeEditSourceEditor in Frameworks */ = {isa = PBXBuildFile; productRef = 297E57912F583AA7005336FB /* CodeEditSourceEditor */; };
 		298697302F5C111100BA4739 /* PROJECT_STRUCTURE.md in Resources */ = {isa = PBXBuildFile; fileRef = 2986972F2F5C111100BA4739 /* PROJECT_STRUCTURE.md */; };
+		5A0000014B00100000B0C001 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 5A0000034B00100000B0C003 /* SwiftTerm */; };
 		8A63C0014C00100000A0C001 /* ACPClient in Frameworks */ = {isa = PBXBuildFile; productRef = 8A63C0034C00100000A0C003 /* ACPClient */; };
 /* End PBXBuildFile section */
 
@@ -59,6 +60,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5A0000014B00100000B0C001 /* SwiftTerm in Frameworks */,
 				8A63C0014C00100000A0C001 /* ACPClient in Frameworks */,
 				297E57922F583AA7005336FB /* CodeEditSourceEditor in Frameworks */,
 			);
@@ -122,6 +124,7 @@
 			);
 			name = CodeX;
 			packageProductDependencies = (
+				5A0000034B00100000B0C003 /* SwiftTerm */,
 				8A63C0034C00100000A0C003 /* ACPClient */,
 				297E57912F583AA7005336FB /* CodeEditSourceEditor */,
 			);
@@ -208,6 +211,7 @@
 			mainGroup = 297E56B22F57FD63005336FB;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				5A0000024B00100000B0C002 /* XCLocalSwiftPackageReference "Packages/SwiftTerm" */,
 				8A63C0024C00100000A0C002 /* XCLocalSwiftPackageReference "Packages/ACPClient" */,
 				297E57902F583AA7005336FB /* XCLocalSwiftPackageReference "Packages/CodeEditSourceEditor" */,
 			);
@@ -582,6 +586,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		5A0000024B00100000B0C002 /* XCLocalSwiftPackageReference "Packages/SwiftTerm" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/SwiftTerm;
+		};
 		297E57902F583AA7005336FB /* XCLocalSwiftPackageReference "Packages/CodeEditSourceEditor" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/CodeEditSourceEditor;
@@ -593,6 +601,11 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		5A0000034B00100000B0C003 /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5A0000024B00100000B0C002 /* XCLocalSwiftPackageReference "Packages/SwiftTerm" */;
+			productName = SwiftTerm;
+		};
 		297E57912F583AA7005336FB /* CodeEditSourceEditor */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = CodeEditSourceEditor;

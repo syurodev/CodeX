@@ -51,9 +51,21 @@ class EditorViewModel {
     // Cached configuration để tránh tạo mới mỗi lần render (gây scroll jitter)
     private var _cachedConfig: SourceEditorConfiguration?
     private var _cachedColorScheme: ColorScheme?
+    private var _cachedTopContentInset: CGFloat?
+    private var _cachedBottomContentInset: CGFloat?
 
-    func editorConfiguration(for colorScheme: ColorScheme) -> SourceEditorConfiguration {
-        if let cached = _cachedConfig, _cachedColorScheme == colorScheme {
+    func editorConfiguration(
+        for colorScheme: ColorScheme,
+        topContentInset: CGFloat = 8,
+        bottomContentInset: CGFloat = 0
+    ) -> SourceEditorConfiguration {
+        let resolvedTopContentInset = max(8, topContentInset)
+        let resolvedBottomContentInset = max(0, bottomContentInset)
+
+        if let cached = _cachedConfig,
+           _cachedColorScheme == colorScheme,
+           _cachedTopContentInset == resolvedTopContentInset,
+           _cachedBottomContentInset == resolvedBottomContentInset {
             return cached
         }
         let config = SourceEditorConfiguration(
@@ -68,7 +80,12 @@ class EditorViewModel {
                 tabWidth: settings.tab_width
             ),
             layout: .init(
-                contentInsets: NSEdgeInsets(top: 8, left: 0, bottom: 0, right: 0)
+                contentInsets: NSEdgeInsets(
+                    top: resolvedTopContentInset,
+                    left: 0,
+                    bottom: resolvedBottomContentInset,
+                    right: 0
+                )
             ),
             peripherals: .init(
                 showMinimap: settings.show_minimap
@@ -76,11 +93,15 @@ class EditorViewModel {
         )
         _cachedConfig = config
         _cachedColorScheme = colorScheme
+        _cachedTopContentInset = resolvedTopContentInset
+        _cachedBottomContentInset = resolvedBottomContentInset
         return config
     }
 
     func invalidateConfigurationCache() {
         _cachedConfig = nil
+        _cachedTopContentInset = nil
+        _cachedBottomContentInset = nil
     }
 
     var cursorPosition: (line: Int, column: Int) {
