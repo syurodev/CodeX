@@ -1,27 +1,26 @@
 import AppKit
 import Foundation
-import CodeEditSourceEditor
 import CodeEditLanguages
+import CodeXEditor
 import SwiftUI
 
+@MainActor
 @Observable
 class EditorViewModel {
+    let settingsStore: SettingsStore
     var openDocuments: [EditorDocument] = []
     var currentDocumentID: UUID?
-    
+
     var currentDocument: EditorDocument? {
         openDocuments.first(where: { $0.id == currentDocumentID })
     }
 
-    // Computed property for compatibility with existing code using `viewModel.text`
     var text: String {
         get { currentDocument?.text ?? "" }
         set {
             if let doc = currentDocument {
                 doc.text = newValue
-                // Sync text với LSP
                 syncTextWithLSP(url: doc.url, text: newValue)
-                // Trigger linting
                 triggerLint(url: doc.url)
             }
         }
@@ -35,105 +34,103 @@ class EditorViewModel {
     }
 
     private var lspService: LanguageClientService?
-    
-    var editorState: SourceEditorState {
-        get { currentDocument?.editorState ?? SourceEditorState() }
-        set {
-            currentDocument?.editorState = newValue
-        }
+
+    var editorState: EditorState {
+        get { currentDocument?.editorState ?? EditorState() }
+        set { currentDocument?.editorState = newValue }
     }
-    var settings = EditorSettings()
+
+    var settings: EditorSettings {
+        settingsStore.settings.editor
+    }
 
     var language: CodeLanguage {
         currentDocument?.language ?? .default
     }
 
-    // Cached configuration để tránh tạo mới mỗi lần render (gây scroll jitter)
-    private var _cachedConfig: SourceEditorConfiguration?
+    // Cached config to avoid churn on every render (causes scroll jitter)
+    private var _cachedConfig: EditorConfiguration?
+    private var _cachedSettings: AppSettings?
     private var _cachedColorScheme: ColorScheme?
     private var _cachedTopContentInset: CGFloat?
     private var _cachedBottomContentInset: CGFloat?
+
+    init(settingsStore: SettingsStore) {
+        self.settingsStore = settingsStore
+    }
 
     func editorConfiguration(
         for colorScheme: ColorScheme,
         topContentInset: CGFloat = 8,
         bottomContentInset: CGFloat = 0
-    ) -> SourceEditorConfiguration {
-        let resolvedTopContentInset = max(8, topContentInset)
-        let resolvedBottomContentInset = max(0, bottomContentInset)
+    ) -> EditorConfiguration {
+        let top    = max(8, topContentInset)
+        let bottom = max(0, bottomContentInset)
+        let appSettings = settingsStore.settings
+        let editorSettings = appSettings.editor
 
         if let cached = _cachedConfig,
+           _cachedSettings == appSettings,
            _cachedColorScheme == colorScheme,
-           _cachedTopContentInset == resolvedTopContentInset,
-           _cachedBottomContentInset == resolvedBottomContentInset {
+           _cachedTopContentInset == top,
+           _cachedBottomContentInset == bottom {
             return cached
         }
-        let config = SourceEditorConfiguration(
-            appearance: .init(
-                theme: colorScheme == .dark ? CodeXTheme.default : CodeXTheme.light,
-                useThemeBackground: settings.use_theme_background,
-                font: settings.resolved_font,
-                lineHeightMultiple: settings.line_height_multiple,
-                letterSpacing: settings.letter_spacing,
-                wrapLines: settings.wrap_lines,
-                useSystemCursor: settings.use_system_cursor,
-                tabWidth: settings.tab_width
-            ),
-            layout: .init(
-                contentInsets: NSEdgeInsets(
-                    top: resolvedTopContentInset,
-                    left: 0,
-                    bottom: resolvedBottomContentInset,
-                    right: 0
-                )
-            ),
-            peripherals: .init(
-                showMinimap: settings.show_minimap
-            )
+
+        let config = EditorConfiguration(
+            font:                editorSettings.resolved_font,
+            lineHeightMultiple:  editorSettings.line_height_multiple,
+            letterSpacing:       editorSettings.letter_spacing,
+            tabWidth:            editorSettings.tab_width,
+            wrapLines:           editorSettings.wrap_lines,
+            isEditable:          true,
+            useSystemCursor:     editorSettings.use_system_cursor,
+            showLineNumbers:     editorSettings.show_line_numbers,
+            showMinimap:         editorSettings.show_minimap,
+            useThemeBackground:  editorSettings.use_theme_background,
+            theme:               appSettings.editorTheme.resolvedTheme(for: colorScheme),
+            contentInsets:       NSEdgeInsets(top: top, left: 0, bottom: bottom, right: 0)
         )
         _cachedConfig = config
+        _cachedSettings = appSettings
         _cachedColorScheme = colorScheme
-        _cachedTopContentInset = resolvedTopContentInset
-        _cachedBottomContentInset = resolvedBottomContentInset
+        _cachedTopContentInset = top
+        _cachedBottomContentInset = bottom
         return config
     }
 
     func invalidateConfigurationCache() {
         _cachedConfig = nil
+        _cachedSettings = nil
         _cachedTopContentInset = nil
         _cachedBottomContentInset = nil
     }
 
     var cursorPosition: (line: Int, column: Int) {
-        guard let cursor = editorState.cursorPositions?.first else {
-            return (1, 1)
-        }
-        return (cursor.start.line, cursor.start.column)
+        guard let cursor = editorState.cursorPositions.first else { return (1, 1) }
+        return (cursor.line, cursor.column)
     }
 
     func openDocument(from url: URL, projectRoot: URL? = nil, using fileService: FileSystemService) {
         if let existingDoc = openDocuments.first(where: { $0.url == url }) {
             selectDocument(id: existingDoc.id)
-            // Gửi didOpen nếu LSP chưa biết file này
             sendDidOpen(for: url)
             return
         }
 
         do {
-            let content = try fileService.readFileContents(at: url)
+            let content  = try fileService.readFileContents(at: url)
             let language = fileService.detectLanguage(for: url)
-            let newDoc = EditorDocument(url: url, text: content, language: language)
+            let newDoc   = EditorDocument(url: url, text: content, language: language)
             openDocuments.append(newDoc)
-            
-            self.currentDocumentID = newDoc.id
-            
+            currentDocumentID = newDoc.id
+
             if lspService == nil {
                 startLSP(for: url, projectRoot: projectRoot)
             } else {
-                // LSP đã chạy → gửi didOpen cho file mới
                 sendDidOpen(for: url)
             }
-            
+
             selectDocument(id: newDoc.id)
         } catch {
             print("Failed to open document: \(error)")
@@ -142,13 +139,9 @@ class EditorViewModel {
 
     private func startLSP(for url: URL, projectRoot: URL? = nil) {
         let root = projectRoot ?? url.deletingLastPathComponent()
-        
-        guard let service = LSPManager.shared.startDenoLSP(projectRoot: root) else {
-            return
-        }
-        
+        guard let service = LSPManager.shared.startDenoLSP(projectRoot: root) else { return }
         self.lspService = service
-        
+
         Task {
             if !service.isInitialized {
                 let initParams: [String: Any] = [
@@ -169,28 +162,17 @@ class EditorViewModel {
                         "enable": true,
                         "lint": true,
                         "unstable": true,
-                        "suggest": [
-                            "imports": ["hosts": ["https://deno.land": true]]
-                        ],
-                        "javascript": [
-                            "suggest": ["autoImports": true, "enabled": true],
-                            "preferences": ["importModuleSpecifier": "shortest"]
-                        ],
-                        "typescript": [
-                            "suggest": ["autoImports": true, "enabled": true],
-                            "preferences": ["importModuleSpecifier": "shortest"]
-                        ]
+                        "suggest": ["imports": ["hosts": ["https://deno.land": true]]],
+                        "javascript": ["suggest": ["autoImports": true, "enabled": true], "preferences": ["importModuleSpecifier": "shortest"]],
+                        "typescript": ["suggest": ["autoImports": true, "enabled": true], "preferences": ["importModuleSpecifier": "shortest"]]
                     ]
                 ]
                 let _ = await service.initialize(params: initParams)
             }
-            
-            // TextDocument/didOpen cho file hiện tại
             sendDidOpen(for: url)
         }
     }
-    
-    // Tách riêng hàm gửi didOpen
+
     private func sendDidOpen(for url: URL) {
         print("📝 Sending textDocument/didOpen for: \(url.lastPathComponent)")
         lspService?.sendNotification(method: "textDocument/didOpen", params: [
@@ -205,13 +187,8 @@ class EditorViewModel {
 
     private func syncTextWithLSP(url: URL, text: String) {
         lspService?.sendNotification(method: "textDocument/didChange", params: [
-            "textDocument": [
-                "uri": url.absoluteString,
-                "version": 2 // Cần quản lý version tốt hơn
-            ],
-            "contentChanges": [
-                ["text": text]
-            ]
+            "textDocument": ["uri": url.absoluteString, "version": 2],
+            "contentChanges": [["text": text]]
         ])
     }
 
@@ -219,7 +196,6 @@ class EditorViewModel {
         Task {
             if let result = await BiomeService.shared.lint(fileURL: url) {
                 print("Linter results: \(result)")
-                // TODO: Parse result and update editor diagnostics
             }
         }
     }
@@ -230,17 +206,10 @@ class EditorViewModel {
 
     func closeDocument(id: UUID) {
         guard let index = openDocuments.firstIndex(where: { $0.id == id }) else { return }
-        
         let wasCurrent = currentDocumentID == id
         openDocuments.remove(at: index)
-        
         if wasCurrent {
-            if openDocuments.isEmpty {
-                currentDocumentID = nil
-            } else {
-                let newIndex = min(index, openDocuments.count - 1)
-                selectDocument(id: openDocuments[newIndex].id)
-            }
+            currentDocumentID = openDocuments.isEmpty ? nil : openDocuments[min(index, openDocuments.count - 1)].id
         }
     }
 
@@ -250,302 +219,194 @@ class EditorViewModel {
     }
 }
 
-// MARK: - CodeSuggestionDelegate
-extension EditorViewModel: CodeSuggestionDelegate {
-    func completionTriggerCharacters() -> Set<String> {
-        return [".", "(", "\"", "'", "/", "@", "<"]
+// MARK: - CompletionDelegate
+
+extension EditorViewModel: CompletionDelegate {
+    var triggerCharacters: Set<String> {
+        [".", "(", "\"", "'", "/", "@", "<"]
     }
 
     func completionSuggestionsRequested(
-        textView: TextViewController,
-        cursorPosition: CursorPosition
-    ) async -> (windowPosition: CursorPosition, items: [CodeSuggestionEntry])? {
+        at cursor: CursorPosition,
+        in text: String
+    ) async -> [any CompletionEntry]? {
         guard let lsp = lspService, let url = currentDocument?.url else { return nil }
-        
-        // Gửi request textDocument/completion tới LSP
+
         let params: [String: Any] = [
             "textDocument": ["uri": url.absoluteString],
-            "position": [
-                "line": cursorPosition.start.line - 1,
-                "character": cursorPosition.start.column - 1
-            ]
+            "position": ["line": cursor.line - 1, "character": cursor.column - 1]
         ]
-        
-        let data = await lsp.sendRequest(method: "textDocument/completion", params: params)
-        // TODO: Parse result and return LSPSuggestionEntry list
-        return (cursorPosition, [LSPSuggestionEntry(label: "exampleCompletion", detail: "LSP")])
+
+        let _ = await lsp.sendRequest(method: "textDocument/completion", params: params)
+        return [LSPSuggestionEntry(label: "exampleCompletion", detail: "LSP")]
     }
-    
-    func completionOnCursorMove(
-        textView: TextViewController,
-        cursorPosition: CursorPosition
-    ) -> [CodeSuggestionEntry]? {
-        return nil
-    }
-    
-    func completionWindowApplyCompletion(
-        item: CodeSuggestionEntry,
-        textView: TextViewController,
-        cursorPosition: CursorPosition?
-    ) {
-        // Áp dụng text edit từ completion
-        if let entry = item as? LSPSuggestionEntry {
+
+    func completionApplied(_ entry: any CompletionEntry, replacingRange range: NSRange) {
+        if let entry = entry as? LSPSuggestionEntry {
             print("Applying completion: \(entry.label)")
         }
     }
 }
 
-// MARK: - JumpToDefinitionDelegate
-extension EditorViewModel: JumpToDefinitionDelegate {
-    func queryLinks(forRange range: NSRange, textView: TextViewController) async -> [JumpToDefinitionLink]? {
-        print("🔍 queryLinks requested for range: \(range)")
-        guard let lsp = lspService, let url = currentDocument?.url else { 
-            print("⚠️ LSP or URL missing (lsp: \(lspService != nil), url: \(currentDocument?.url != nil))")
-            return nil 
-        }
-        
-        // Chuyển đổi NSRange sang CursorPosition để lấy line/column
-        guard let resolvedPosition = textView.resolveCursorPosition(CursorPosition(range: range)) else {
-            print("⚠️ Failed to resolve cursor position for range")
-            return nil
-        }
+// MARK: - DefinitionDelegate
+
+extension EditorViewModel: DefinitionDelegate {
+    func queryDefinition(
+        forRange range: NSRange,
+        cursor: CursorPosition,
+        in text: String,
+        url: URL?
+    ) async -> [DefinitionLink]? {
+        guard let lsp = lspService, let url = url ?? currentDocument?.url else { return nil }
 
         let params: [String: Any] = [
             "textDocument": ["uri": url.absoluteString],
-            "position": [
-                "line": resolvedPosition.start.line - 1,
-                "character": resolvedPosition.start.column - 1
-            ]
+            "position": ["line": cursor.line - 1, "character": cursor.column - 1]
         ]
-        
-        print("📡 Sending textDocument/definition to LSP: \(params)")
+
         let response = await lsp.sendRequest(method: "textDocument/definition", params: params)
-        print("📥 LSP response for definition: \(String(describing: response))")
-        
-        // Parse response (Location | Location[] | LocationLink[])
+
         var locations: [[String: Any]] = []
         if let dict = response as? [String: Any] {
             locations = [dict]
         } else if let array = response as? [[String: Any]] {
             locations = array
         } else if let array = response as? NSArray {
-            // Handle cases where it's returned as NSArray of NSDictionary
-            for item in array {
-                if let dict = item as? [String: Any] {
-                    locations.append(dict)
-                }
-            }
+            for item in array { if let d = item as? [String: Any] { locations.append(d) } }
         }
-        
-        print("📍 Found \(locations.count) locations")
-        
-        // Follow-through logic: nếu definition trỏ về import line cùng file → resolve module path thủ công
+
+        // Follow-through: if definition points to an import line in the same file, resolve the module
         if locations.count == 1,
            let loc = locations.first,
            let targetUri = (loc["uri"] as? String) ?? (loc["targetUri"] as? String),
            let targetURL = URL(string: targetUri),
            targetURL.standardizedFileURL.path == url.standardizedFileURL.path {
-            
+
             let targetRange = (loc["targetSelectionRange"] as? [String: Any]) ?? (loc["range"] as? [String: Any])
             if let start = targetRange?["start"] as? [String: Any],
                let targetLine = start["line"] as? Int {
-                
                 let lines = text.components(separatedBy: "\n")
                 if targetLine < lines.count {
                     let lineText = lines[targetLine].trimmingCharacters(in: .whitespaces)
-                    let isImportLine = lineText.hasPrefix("import ") || lineText.hasPrefix("import{") 
-                        || lineText.contains("require(")
-                    if isImportLine {
-                        print("🔄 Definition points to import line, resolving module path...")
-                        
-                        if let modulePath = extractModulePath(from: lines[targetLine]),
-                           let resolvedURL = resolveModulePath(modulePath, relativeTo: url) {
-                            // Chuẩn hóa URL: loại bỏ ./  ../ segments
-                            let normalizedURL = resolvedURL.standardizedFileURL
-                            print("✅ Resolved import to: \(normalizedURL.path)")
-                            let link = JumpToDefinitionLink(
-                                url: normalizedURL,
-                                targetRange: CursorPosition(line: 1, column: 1),
-                                typeName: normalizedURL.lastPathComponent,
-                                sourcePreview: "Jump to \(normalizedURL.lastPathComponent)",
-                                documentation: nil
-                            )
-                            return [link]
-                        }
+                    let isImport = lineText.hasPrefix("import ") || lineText.hasPrefix("import{") || lineText.contains("require(")
+                    if isImport,
+                       let modulePath = extractModulePath(from: lines[targetLine]),
+                       let resolved = resolveModulePath(modulePath, relativeTo: url) {
+                        return [DefinitionLink(url: resolved.standardizedFileURL, line: 1, column: 1, label: resolved.lastPathComponent)]
                     }
                 }
             }
         }
-        
+
         return parseLocations(locations, currentURL: url)
     }
-    
-    /// Extract module path từ import/require statement
-    /// Hỗ trợ: `import { X } from './path'`, `import './path'`, `require('path')`
+
+    func openLink(_ link: DefinitionLink) {
+        guard let url = link.url else { return }
+        NotificationCenter.default.post(
+            name: NSNotification.Name("CodeX.OpenAndJump"),
+            object: nil,
+            userInfo: ["url": url, "line": link.line, "column": link.column]
+        )
+    }
+
+    // MARK: Module path helpers
+
     private func extractModulePath(from lineText: String) -> String? {
-        // Pattern 1: import ... from 'path'
         if let fromRange = lineText.range(of: "from") {
-            let afterFrom = String(lineText[fromRange.upperBound...])
-            if let path = extractQuotedString(from: afterFrom) {
-                return path
-            }
+            if let path = extractQuotedString(from: String(lineText[fromRange.upperBound...])) { return path }
         }
-        
-        // Pattern 2: import 'path' (side-effect import)
         let trimmed = lineText.trimmingCharacters(in: .whitespaces)
-        if trimmed.hasPrefix("import ") && !trimmed.contains("from") {
-            let afterImport = String(trimmed.dropFirst("import ".count))
-            if let path = extractQuotedString(from: afterImport) {
-                return path
-            }
+        if trimmed.hasPrefix("import "), !trimmed.contains("from") {
+            if let path = extractQuotedString(from: String(trimmed.dropFirst("import ".count))) { return path }
         }
-        
-        // Pattern 3: require('path')
-        if let requireRange = lineText.range(of: "require(") {
-            let afterRequire = String(lineText[requireRange.upperBound...])
-            if let path = extractQuotedString(from: afterRequire) {
-                return path
-            }
+        if let reqRange = lineText.range(of: "require(") {
+            if let path = extractQuotedString(from: String(lineText[reqRange.upperBound...])) { return path }
         }
-        
         return nil
     }
-    
-    /// Extract string trong quotes (single hoặc double)
+
     private func extractQuotedString(from text: String) -> String? {
-        let pattern = #"['"]([^'"]+)['"]"#
-        guard let regex = try? NSRegularExpression(pattern: pattern),
+        guard let regex = try? NSRegularExpression(pattern: #"['"]([^'"]+)['"]"#),
               let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let range = Range(match.range(at: 1), in: text) else {
-            return nil
-        }
+              let range = Range(match.range(at: 1), in: text) else { return nil }
         return String(text[range])
     }
-    
-    /// Resolve module path thành URL file thực tế
-    /// Hỗ trợ: relative paths, bare imports (node_modules), scoped packages
+
     private func resolveModulePath(_ modulePath: String, relativeTo fileURL: URL) -> URL? {
         let dir = fileURL.deletingLastPathComponent()
         let extensions = [".ts", ".tsx", ".js", ".jsx", ".d.ts"]
-        let indexFiles = ["/index.ts", "/index.tsx", "/index.js", "/index.jsx"]
-        
-        // Relative path (./ hoặc ../)
+        let indexFiles  = ["/index.ts", "/index.tsx", "/index.js", "/index.jsx"]
         if modulePath.hasPrefix(".") {
-            let base = dir.appendingPathComponent(modulePath)
-            return resolveWithExtensions(base, extensions: extensions, indexFiles: indexFiles)
+            return resolveWithExtensions(dir.appendingPathComponent(modulePath), extensions: extensions, indexFiles: indexFiles)
         }
-        
-        // Bare import (node_modules) - ví dụ: @nestjs/common, dotenv
         return resolveFromNodeModules(modulePath, startingFrom: dir, extensions: extensions, indexFiles: indexFiles)
     }
-    
-    /// Thử resolve file path với các extension và index files
+
     private func resolveWithExtensions(_ base: URL, extensions: [String], indexFiles: [String]) -> URL? {
-        if FileManager.default.fileExists(atPath: base.path) {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: base.path) {
             var isDir: ObjCBool = false
-            FileManager.default.fileExists(atPath: base.path, isDirectory: &isDir)
+            fm.fileExists(atPath: base.path, isDirectory: &isDir)
             if !isDir.boolValue { return base }
-            // Nếu là directory → thử index files
-            for indexFile in indexFiles {
-                let candidate = URL(fileURLWithPath: base.path + indexFile)
-                if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+            for idx in indexFiles {
+                let c = URL(fileURLWithPath: base.path + idx)
+                if fm.fileExists(atPath: c.path) { return c }
             }
         }
-        
         for ext in extensions {
-            let candidate = URL(fileURLWithPath: base.path + ext)
-            if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+            let c = URL(fileURLWithPath: base.path + ext)
+            if fm.fileExists(atPath: c.path) { return c }
         }
-        
-        for indexFile in indexFiles {
-            let candidate = URL(fileURLWithPath: base.path + indexFile)
-            if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+        for idx in indexFiles {
+            let c = URL(fileURLWithPath: base.path + idx)
+            if fm.fileExists(atPath: c.path) { return c }
         }
-        
         return nil
     }
-    
-    /// Resolve bare import từ node_modules (traverse up directories)
+
     private func resolveFromNodeModules(_ modulePath: String, startingFrom dir: URL, extensions: [String], indexFiles: [String]) -> URL? {
         var current = dir
         let fm = FileManager.default
-        
         while current.path != "/" {
-            let nodeModules = current.appendingPathComponent("node_modules")
-            let packageDir = nodeModules.appendingPathComponent(modulePath)
-            
-            if fm.fileExists(atPath: packageDir.path) {
-                // Thử đọc package.json để tìm entry point
-                let packageJson = packageDir.appendingPathComponent("package.json")
-                if let data = fm.contents(atPath: packageJson.path),
+            let pkgDir = current.appendingPathComponent("node_modules").appendingPathComponent(modulePath)
+            if fm.fileExists(atPath: pkgDir.path) {
+                let pkgJson = pkgDir.appendingPathComponent("package.json")
+                if let data = fm.contents(atPath: pkgJson.path),
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    // Ưu tiên: types → typings → main
                     for field in ["types", "typings", "main"] {
-                        if let entry = json[field] as? String {
-                            let entryURL = packageDir.appendingPathComponent(entry)
-                            if let resolved = resolveWithExtensions(entryURL, extensions: extensions, indexFiles: indexFiles) {
-                                return resolved
-                            }
+                        if let entry = json[field] as? String,
+                           let resolved = resolveWithExtensions(pkgDir.appendingPathComponent(entry), extensions: extensions, indexFiles: indexFiles) {
+                            return resolved
                         }
                     }
                 }
-                
-                // Fallback: thử index files trong package dir
-                if let resolved = resolveWithExtensions(packageDir, extensions: extensions, indexFiles: indexFiles) {
-                    return resolved
-                }
+                if let resolved = resolveWithExtensions(pkgDir, extensions: extensions, indexFiles: indexFiles) { return resolved }
             }
-            
             current = current.deletingLastPathComponent()
         }
-        
-        print("⚠️ Could not resolve module: \(modulePath)")
         return nil
     }
-    
-    /// Parse LSP locations thành JumpToDefinitionLink array
-    private func parseLocations(_ locations: [[String: Any]], currentURL: URL) -> [JumpToDefinitionLink] {
-        return locations.compactMap { loc -> JumpToDefinitionLink? in
+
+    private func parseLocations(_ locations: [[String: Any]], currentURL: URL) -> [DefinitionLink] {
+        return locations.compactMap { loc -> DefinitionLink? in
             let uriString = (loc["uri"] as? String) ?? (loc["targetUri"] as? String)
             let rangeDict = (loc["range"] as? [String: Any]) ?? (loc["targetSelectionRange"] as? [String: Any]) ?? (loc["targetRange"] as? [String: Any])
-            
-            guard let uriString = uriString,
+            guard let uriString,
                   let uri = URL(string: uriString),
-                  let rangeDict = rangeDict,
+                  let rangeDict,
                   let start = rangeDict["start"] as? [String: Any],
                   let line = start["line"] as? Int,
-                  let character = start["character"] as? Int else {
-                print("⚠️ Failed to parse location: \(loc)")
-                return nil
-            }
-            
-            let targetRange = CursorPosition(line: line + 1, column: character + 1)
+                  let character = start["character"] as? Int else { return nil }
+
             let isSameFile = uri.standardizedFileURL.path == currentURL.standardizedFileURL.path
-            
-            let link = JumpToDefinitionLink(
+            return DefinitionLink(
                 url: isSameFile ? nil : uri,
-                targetRange: targetRange,
-                typeName: uri.lastPathComponent,
-                sourcePreview: "Jump to definition in \(uri.lastPathComponent)",
-                documentation: nil
+                line: line + 1,
+                column: character + 1,
+                label: uri.lastPathComponent,
+                sourcePreview: "Jump to definition in \(uri.lastPathComponent)"
             )
-            print("✅ Created link: \(link.label) at \(uri.lastPathComponent):\(line+1):\(character+1) (isSameFile: \(isSameFile))")
-            return link
         }
     }
-    
-    func openLink(link: JumpToDefinitionLink) {
-        print("🔗 openLink called for: \(link.url?.absoluteString ?? "Local") at line: \(link.targetRange.start.line)")
-        guard let url = link.url else { return }
-        
-        // Link này trỏ tới file khác. 
-        // Logic mở file này cần được xử lý ở cấp UI (vị trí có quyền access FileSystemService)
-        // Ta dùng Notification hoặc Callback
-        NotificationCenter.default.post(name: NSNotification.Name("CodeX.OpenAndJump"), object: nil, userInfo: [
-            "url": url,
-            "line": link.targetRange.start.line,
-            "column": link.targetRange.start.column
-        ])
-    }
 }
-

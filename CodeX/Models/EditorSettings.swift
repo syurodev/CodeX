@@ -2,7 +2,7 @@ import AppKit
 
 /// Configurable editor settings with Xcode-like defaults.
 /// These values will be editable via a settings screen in the future.
-struct EditorSettings {
+struct EditorSettings: Codable, Equatable {
     /// Font name for the code editor (e.g. "SFMono-Regular")
     var font_name: String = "SFMono-Regular"
 

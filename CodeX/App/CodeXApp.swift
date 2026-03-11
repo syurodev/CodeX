@@ -9,6 +9,7 @@ struct CodeXApp: App {
         WindowGroup {
             MainWindowView()
                 .environment(appViewModel)
+                .environment(appViewModel.settingsStore)
                 .containerBackground(.thinMaterial, for: .window)
                 .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
                 .onDisappear {
@@ -27,15 +28,46 @@ struct CodeXApp: App {
                 }
                 .keyboardShortcut("o", modifiers: .command)
             }
-            
+
             CommandGroup(replacing: .saveItem) {
                 Button("Save") {
                     // Cần link với save logic sau này
                 }
                 .keyboardShortcut("s", modifiers: .command)
             }
-            
-            // Xử lý phím tắt đóng Window và Tab
+
+            CommandMenu("Terminal") {
+                Button("Toggle Terminal") {
+                    appViewModel.toggleTerminalPanel()
+                }
+                .keyboardShortcut("`", modifiers: .control)
+
+                Divider()
+
+                Button("New Terminal Session") {
+                    appViewModel.terminalPanelViewModel.newSession(workingDirectory: appViewModel.project?.rootURL)
+                    if !appViewModel.isTerminalPanelPresented {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            appViewModel.isTerminalPanelPresented = true
+                        }
+                    }
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+
+                Button("New Terminal at Current File") {
+                    let fileURL = appViewModel.editorViewModel.currentDocument?.url
+                    appViewModel.terminalPanelViewModel.newSessionAtCurrentFile(
+                        fileURL: fileURL,
+                        projectRoot: appViewModel.project?.rootURL
+                    )
+                    if !appViewModel.isTerminalPanelPresented {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            appViewModel.isTerminalPanelPresented = true
+                        }
+                    }
+                }
+            }
+
             CommandMenu("Editor") {
                 Button("Close Tab") {
                     if let currentID = appViewModel.editorViewModel.currentDocumentID {
@@ -43,12 +75,19 @@ struct CodeXApp: App {
                     }
                 }
                 .keyboardShortcut("w", modifiers: .command)
-                
+
                 Button("Close All Tabs") {
                     appViewModel.editorViewModel.closeAllDocuments()
                 }
                 .keyboardShortcut("w", modifiers: [.command, .shift])
             }
         }
+
+        Settings {
+            SettingsWindowView()
+                .environment(appViewModel.settingsStore)
+                .containerBackground(.thinMaterial, for: .window)
+        }
+        .defaultSize(width: 880, height: 560)
     }
 }

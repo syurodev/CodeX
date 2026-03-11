@@ -34,18 +34,50 @@ struct MainWindowView: View {
                 }
                 .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 400)
             } detail: {
-                CodeEditorView(
-                    viewModel: appVM.editorViewModel,
-                    bottomContentInset: StatusBarView.height
-                )
-                    .overlay(alignment: .bottom) {
+                VStack(spacing: 0) {
+                    ZStack(alignment: .top) {
+                        CodeEditorView(
+                            viewModel: appVM.editorViewModel,
+                            bottomContentInset: appVM.isTerminalPanelPresented ? 0 : StatusBarView.height
+                        )
+                        .overlay(alignment: .bottom) {
+                            if !appVM.isTerminalPanelPresented {
+                                StatusBarView(
+                                    document: appVM.editorViewModel.currentDocument,
+                                    cursorPosition: appVM.editorViewModel.cursorPosition
+                                )
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        if !appVM.editorViewModel.openDocuments.isEmpty {
+                            EditorTabBarView(viewModel: appVM.editorViewModel)
+                                .padding(.top, 4)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    if appVM.isTerminalPanelPresented {
+                        TerminalPanelView(
+                            viewModel: appVM.terminalPanelViewModel,
+                            height: $appVM.terminalPanelHeight,
+                            onNewSession: {
+                                appVM.terminalPanelViewModel.newSession(workingDirectory: appVM.project?.rootURL)
+                            },
+                            onClose: {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    appVM.isTerminalPanelPresented = false
+                                }
+                            }
+                        )
+
                         StatusBarView(
                             document: appVM.editorViewModel.currentDocument,
                             cursorPosition: appVM.editorViewModel.cursorPosition
                         )
                     }
+                }
             }
-            .frame(minWidth: 500)
             .inspector(isPresented: $appVM.isAgentInspectorPresented) {
                 AgentPanelView(viewModel: appVM.agentPanelViewModel)
                     .background(Color(nsColor: .windowBackgroundColor))
@@ -111,6 +143,9 @@ private extension MainWindowView {
 }
 
 #Preview {
+    let appViewModel = AppViewModel()
+
     MainWindowView()
-        .environment(AppViewModel())
+        .environment(appViewModel)
+        .environment(appViewModel.settingsStore)
 }

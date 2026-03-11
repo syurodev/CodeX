@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(find /Users/syuro/Workspace/PERSONAL/CodeX/CodeX/Views/Editor -type f -name \"*.swift\" 2>/dev/null | head -20)",
+      "Bash(find /Users/syuro/Workspace/PERSONAL/CodeX/Packages/CodeEditSourceEditor/Sources -name \"*.swift\" -type f 2>/dev/null | head -30)",
+      "Read(//Users/syuro/Library/Developer/Xcode/DerivedData/CodeX-aknythdfvwzsrvfhsrqzkwbjclhf/SourcePackages/checkouts/TextStory/Sources/TextStory/**)",
+      "Read(//Users/syuro/.swiftpm/**)",
+      "Bash(find /Users/syuro/Library/Developer/Xcode/DerivedData/CodeX-aknythdfvwzsrvfhsrqzkwbjclhf/SourcePackages/checkouts/CodeEditLanguages -type f -name \"*.swift\" 2>/dev/null | head -20)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:api.github.com)",
+      "WebSearch",
+      "Bash(cd /Users/syuro/Workspace/PERSONAL/CodeX/Packages/CodeXEditor && swift package resolve 2>&1 | tail -5)",
+      "Bash(find /Users/syuro/Workspace/PERSONAL/CodeX/Packages/CodeXEditor/.build -name *.resolved)",
+      "Read(//Users/syuro/Library/Caches/org.swift.swiftpm/**)",
+      "Bash(cd /Users/syuro/Workspace/PERSONAL/CodeX/Packages/CodeXEditor && swift package resolve && echo \"DONE\" && ls .build/checkouts/)",
+      "Bash(find /Users/syuro/Workspace/PERSONAL/CodeX/Packages -type f -name \"*LayoutManager*\" -o -name \"*TextView*\" -path \"*/CodeEditTextView/*\" 2>/dev/null | head -20)",
+      "Bash(find /Users/syuro/Workspace/PERSONAL/CodeX/Packages/CodeEditTextView -type f -name \"*.swift\" 2>/dev/null | head -30)"
+    ]
+  }
+}

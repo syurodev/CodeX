@@ -1,9 +1,9 @@
 import SwiftUI
-import CodeEditSourceEditor
-import CodeEditLanguages
+import CodeXEditor
 
 struct CodeEditorView: View {
     @Environment(AppViewModel.self) private var appViewModel
+    @Environment(SettingsStore.self) private var settingsStore
     @Environment(\.colorScheme) private var colorScheme
     @Bindable var viewModel: EditorViewModel
     let bottomContentInset: CGFloat
@@ -14,26 +14,26 @@ struct CodeEditorView: View {
     }
 
     var body: some View {
+        let _ = settingsStore.settings
+
         if viewModel.openDocuments.isEmpty {
             emptyState
         } else {
             ZStack {
                 ForEach(viewModel.openDocuments) { document in
                     let isActive = document.id == viewModel.currentDocumentID
-                    
+
                     SingleCodeEditorView(
                         document: document,
                         viewModel: viewModel,
                         bottomContentInset: bottomContentInset
                     )
-                        .opacity(isActive ? 1 : 0)
-                        .allowsHitTesting(isActive)
+                    .opacity(isActive ? 1 : 0)
+                    .allowsHitTesting(isActive)
                 }
             }
         }
     }
-    
-    // ... (rest of the existing properties)
 }
 
 struct SingleCodeEditorView: View {
@@ -41,27 +41,24 @@ struct SingleCodeEditorView: View {
     var viewModel: EditorViewModel
     let bottomContentInset: CGFloat
     @Environment(\.colorScheme) private var colorScheme
-    
+
     var body: some View {
         let textBinding = Binding<String>(
             get: { document.text },
             set: { newValue in
                 document.text = newValue
-                // Sync text với LSP and trigger linting via viewModel
                 viewModel.documentTextChanged(id: document.id, newText: newValue)
             }
         )
-        
-        let stateBinding = Binding<SourceEditorState>(
+
+        let stateBinding = Binding<EditorState>(
             get: { document.editorState },
-            set: { newValue in
-                document.editorState = newValue
-            }
+            set: { newValue in document.editorState = newValue }
         )
 
         GeometryReader { proxy in
-            SourceEditor(
-                textBinding,
+            CodeXEditorView(
+                text: textBinding,
                 language: document.language,
                 configuration: viewModel.editorConfiguration(
                     for: colorScheme,
@@ -70,7 +67,7 @@ struct SingleCodeEditorView: View {
                 ),
                 state: stateBinding,
                 completionDelegate: viewModel,
-                jumpToDefinitionDelegate: viewModel
+                definitionDelegate: viewModel
             )
             .ignoresSafeArea(.container, edges: .top)
             .frame(maxWidth: .infinity, maxHeight: .infinity)

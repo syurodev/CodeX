@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 import CodeEditLanguages
-import CodeEditSourceEditor
+import CodeXEditor
 
 @Observable
 class EditorDocument: Identifiable {
@@ -10,7 +10,7 @@ class EditorDocument: Identifiable {
     var text: String
     var language: CodeLanguage
     var isModified: Bool
-    var editorState: SourceEditorState
+    var editorState: EditorState
 
     var fileName: String { url.lastPathComponent }
 
@@ -20,6 +20,6 @@ class EditorDocument: Identifiable {
         self.text = text
         self.language = language
         self.isModified = false
-        self.editorState = SourceEditorState()
+        self.editorState = EditorState()
     }
 }

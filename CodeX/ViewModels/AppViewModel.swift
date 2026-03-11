@@ -1,19 +1,35 @@
 import SwiftUI
-import CodeEditSourceEditor
+import CodeXEditor
 
+@MainActor
 @Observable
 class AppViewModel {
+    let settingsStore: SettingsStore
     var project: Project?
     var fileNavigatorViewModel = FileNavigatorViewModel()
-    var editorViewModel = EditorViewModel()
+    var editorViewModel: EditorViewModel
     var gitViewModel = GitViewModel()
     var agentPanelViewModel = AgentPanelViewModel()
+    var terminalPanelViewModel = TerminalPanelViewModel()
+    var isTerminalPanelPresented = false
+    var terminalPanelHeight: CGFloat = 260
     var selectedSidebarTab: SidebarTab = .explorer
     var splitViewVisibility: NavigationSplitViewVisibility = .all
     var isAgentInspectorPresented = false
 
     private let fileSystemService = FileSystemService()
     private let gitService = GitService()
+
+    init() {
+        let settingsStore = SettingsStore()
+        self.settingsStore = settingsStore
+        self.editorViewModel = EditorViewModel(settingsStore: settingsStore)
+    }
+
+    init(settingsStore: SettingsStore) {
+        self.settingsStore = settingsStore
+        self.editorViewModel = EditorViewModel(settingsStore: settingsStore)
+    }
 
     var projectName: String {
         project?.name ?? "CodeX"
@@ -27,6 +43,15 @@ class AppViewModel {
         fileNavigatorViewModel.loadDirectory(at: url, using: fileSystemService)
         gitViewModel.load(url: url, using: gitService)
         refreshGitFileStatuses()
+    }
+
+    func toggleTerminalPanel() {
+        if !isTerminalPanelPresented && terminalPanelViewModel.sessions.isEmpty {
+            terminalPanelViewModel.newSession(workingDirectory: project?.rootURL)
+        }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isTerminalPanelPresented.toggle()
+        }
     }
 
     func openFile(_ node: FileNode) {
@@ -112,9 +137,7 @@ class AppViewModel {
         if !isAgentInspectorPresented {
             selectedSidebarTab = .spray
         }
-        withAnimation(.easeInOut(duration: 0.2)) {
-            isAgentInspectorPresented.toggle()
-        }
+        isAgentInspectorPresented.toggle()
     }
 
     func shutdownAgentRuntimes() {
@@ -122,6 +145,9 @@ class AppViewModel {
     }
 
     deinit {
-        shutdownAgentRuntimes()
+        MainActor.assumeIsolated {
+            shutdownAgentRuntimes()
+            terminalPanelViewModel.killAll()
+        }
     }
 }

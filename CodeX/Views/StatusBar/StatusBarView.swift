@@ -49,8 +49,9 @@ struct StatusBarView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: Self.height)
         .background {
-            StatusBarBackgroundView()
+            StatusBarBackgroundView(isEnabled: document != nil)
         }
+        .modifier(StatusBarLiquidGlassModifier(isEnabled: document != nil))
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(.white.opacity(colorScheme == .dark ? 0.08 : 0.16))
@@ -60,13 +61,29 @@ struct StatusBarView: View {
 }
 
 private struct StatusBarBackgroundView: View {
+    let isEnabled: Bool
+
     var body: some View {
-        if #available(macOS 26.0, *) {
+        if !isEnabled {
             Color.clear
-                .glassEffect(.regular, in: ConcentricRectangle())
+        } else if #available(macOS 26.0, *) {
+            Color.clear
         } else {
             Rectangle()
                 .fill(.regularMaterial)
+        }
+    }
+}
+
+private struct StatusBarLiquidGlassModifier: ViewModifier {
+    let isEnabled: Bool
+
+    func body(content: Content) -> some View {
+        if isEnabled, #available(macOS 26.0, *) {
+            content
+                .glassEffect(.regular, in: .rect(cornerRadius: 0))
+        } else {
+            content
         }
     }
 }

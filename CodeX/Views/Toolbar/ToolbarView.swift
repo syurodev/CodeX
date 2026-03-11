@@ -30,47 +30,6 @@ struct AgentInspectorToolbarContent: ToolbarContent {
     }
 }
 
-struct ToolbarGitBranchButton: View {
-    @Bindable var appViewModel: AppViewModel
-
-    var body: some View {
-        Button(action: {
-            appViewModel.gitViewModel.is_popover_presented.toggle()
-        }) {
-            Label(branchLabel, systemImage: "arrow.triangle.branch")
-                .labelStyle(.titleAndIcon)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-        }
-        .buttonStyle(.plain)
-        .disabled(!appViewModel.gitViewModel.is_git_repo)
-        .help(appViewModel.gitViewModel.is_git_repo ? "Switch Git branch" : "Open a Git repository to enable branch actions")
-        .popover(isPresented: $appViewModel.gitViewModel.is_popover_presented, arrowEdge: .bottom) {
-            BranchPopoverView(appViewModel: appViewModel)
-        }
-        .alert("Rename Branch", isPresented: $appViewModel.gitViewModel.isShowingRenameAlert) {
-            TextField("New branch name", text: $appViewModel.gitViewModel.branchNameInput)
-            Button("Rename") {
-                let oldName = appViewModel.gitViewModel.targetBranchForAction
-                let newName = appViewModel.gitViewModel.branchNameInput.trimmingCharacters(in: .whitespaces)
-                if !newName.isEmpty && newName != oldName {
-                    appViewModel.rename_branch(oldName: oldName, newName: newName)
-                }
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("Enter a new name for branch '\(appViewModel.gitViewModel.targetBranchForAction)'.")
-        }
-        .sheet(isPresented: $appViewModel.gitViewModel.isShowingNewBranchAlert) {
-            NewBranchSheetView(appViewModel: appViewModel)
-        }
-    }
-
-    private var branchLabel: String {
-        appViewModel.gitViewModel.is_git_repo ? appViewModel.gitViewModel.current_branch : "Git"
-    }
-}
-
 private struct ToolbarTitlebarContextView: View {
     @Bindable var appViewModel: AppViewModel
 
@@ -126,6 +85,47 @@ private struct ToolbarTitlebarContextView: View {
         }
 
         return directoryURL.lastPathComponent
+    }
+}
+
+struct ToolbarGitBranchButton: View {
+    @Bindable var appViewModel: AppViewModel
+
+    var body: some View {
+        Button(action: {
+            appViewModel.gitViewModel.is_popover_presented.toggle()
+        }) {
+            Label(branchLabel, systemImage: "arrow.triangle.branch")
+                .labelStyle(.titleAndIcon)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+        }
+        .buttonStyle(.plain)
+        .disabled(!appViewModel.gitViewModel.is_git_repo)
+        .help(appViewModel.gitViewModel.is_git_repo ? "Switch Git branch" : "Open a Git repository to enable branch actions")
+        .popover(isPresented: $appViewModel.gitViewModel.is_popover_presented, arrowEdge: .bottom) {
+            BranchPopoverView(appViewModel: appViewModel)
+        }
+        .alert("Rename Branch", isPresented: $appViewModel.gitViewModel.isShowingRenameAlert) {
+            TextField("New branch name", text: $appViewModel.gitViewModel.branchNameInput)
+            Button("Rename") {
+                let oldName = appViewModel.gitViewModel.targetBranchForAction
+                let newName = appViewModel.gitViewModel.branchNameInput.trimmingCharacters(in: .whitespaces)
+                if !newName.isEmpty && newName != oldName {
+                    appViewModel.rename_branch(oldName: oldName, newName: newName)
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Enter a new name for branch '\(appViewModel.gitViewModel.targetBranchForAction)'.")
+        }
+        .sheet(isPresented: $appViewModel.gitViewModel.isShowingNewBranchAlert) {
+            NewBranchSheetView(appViewModel: appViewModel)
+        }
+    }
+
+    private var branchLabel: String {
+        appViewModel.gitViewModel.is_git_repo ? appViewModel.gitViewModel.current_branch : "Git"
     }
 }
 
