@@ -6,94 +6,97 @@ struct MainWindowView: View {
     var body: some View {
         @Bindable var appVM = appViewModel
 
-        VStack(spacing: 0) {
-            NavigationSplitView(columnVisibility: $appVM.splitViewVisibility) {
-                VStack(spacing: 0) {
-                    SidebarToolbarView(viewModel: appVM)
+        NavigationSplitView(columnVisibility: $appVM.splitViewVisibility) {
+            VStack(spacing: 0) {
+                SidebarToolbarView(viewModel: appVM)
 
-                    Divider()
+                Divider()
 
-                    if appVM.selectedSidebarTab == .explorer {
-                        FileNavigatorView(
-                            viewModel: appVM.fileNavigatorViewModel,
-                            gitStatusesByURL: appVM.fileNavigatorViewModel.gitStatusesByURL,
-                            onFileSelected: { node in
-                                appVM.openFile(node)
-                            }
-                        )
-                    } else if appVM.selectedSidebarTab == .spray {
-                        AgentSidebarView(viewModel: appVM.agentPanelViewModel)
-                    } else {
-                        VStack {
-                            Spacer()
-                            Text("Not implemented yet")
-                                .foregroundColor(.secondary)
-                            Spacer()
+                if appVM.selectedSidebarTab == .explorer {
+                    FileNavigatorView(
+                        viewModel: appVM.fileNavigatorViewModel,
+                        gitStatusesByURL: appVM.fileNavigatorViewModel.gitStatusesByURL,
+                        onFileSelected: { node in
+                            appVM.openFile(node)
                         }
+                    )
+                } else if appVM.selectedSidebarTab == .spray {
+                    AgentSidebarView(viewModel: appVM.agentPanelViewModel)
+                } else {
+                    VStack {
+                        Spacer()
+                        Text("Not implemented yet")
+                            .foregroundColor(.secondary)
+                        Spacer()
                     }
                 }
-                .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 400)
-            } detail: {
-                VStack(spacing: 0) {
-                    ZStack(alignment: .top) {
-                        CodeEditorView(
-                            viewModel: appVM.editorViewModel,
-                            bottomContentInset: appVM.isTerminalPanelPresented ? 0 : StatusBarView.height
-                        )
-                        .overlay(alignment: .bottom) {
-                            if !appVM.isTerminalPanelPresented {
-                                StatusBarView(
-                                    document: appVM.editorViewModel.currentDocument,
-                                    cursorPosition: appVM.editorViewModel.cursorPosition
-                                )
-                            }
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                        if !appVM.editorViewModel.openDocuments.isEmpty {
-                            EditorTabBarView(viewModel: appVM.editorViewModel)
-                                .padding(.top, 4)
+            }
+            .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 400)
+        } detail: {
+            VStack(spacing: 0) {
+                ZStack(alignment: .top) {
+                    CodeEditorView(
+                        viewModel: appVM.editorViewModel,
+                        bottomContentInset: appVM.isTerminalPanelPresented ? 0 : StatusBarView.height
+                    )
+                    .overlay(alignment: .bottom) {
+                        if !appVM.isTerminalPanelPresented {
+                            StatusBarView(
+                                document: appVM.editorViewModel.currentDocument,
+                                cursorPosition: appVM.editorViewModel.cursorPosition
+                            )
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                    if appVM.isTerminalPanelPresented {
-                        TerminalPanelView(
-                            viewModel: appVM.terminalPanelViewModel,
-                            height: $appVM.terminalPanelHeight,
-                            onNewSession: {
-                                appVM.terminalPanelViewModel.newSession(workingDirectory: appVM.project?.rootURL)
-                            },
-                            onClose: {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    appVM.isTerminalPanelPresented = false
+                    if !appVM.editorViewModel.openDocuments.isEmpty {
+                        EditorTopChromeView {
+                            VStack(spacing: 0) {
+                                EditorTabBarView(viewModel: appVM.editorViewModel)
+
+                                if let currentDocument = appVM.editorViewModel.currentDocument {
+                                    EditorJumpBarView(document: currentDocument)
                                 }
                             }
-                        )
-
-                        StatusBarView(
-                            document: appVM.editorViewModel.currentDocument,
-                            cursorPosition: appVM.editorViewModel.cursorPosition
-                        )
-                    }
-                }
-            }
-            .inspector(isPresented: $appVM.isAgentInspectorPresented) {
-                AgentPanelView(viewModel: appVM.agentPanelViewModel)
-                    .background(Color(nsColor: .windowBackgroundColor))
-                    .inspectorColumnWidth(min: 260, ideal: 320, max: 700)
-                    .toolbar {
-                        if appVM.isAgentInspectorPresented {
-                            AgentInspectorToolbarContent(appViewModel: appVM)
                         }
                     }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if appVM.isTerminalPanelPresented {
+                    TerminalPanelView(
+                        viewModel: appVM.terminalPanelViewModel,
+                        height: $appVM.terminalPanelHeight,
+                        onNewSession: {
+                            appVM.terminalPanelViewModel.newSession(workingDirectory: appVM.project?.rootURL)
+                        },
+                        onClose: {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                appVM.isTerminalPanelPresented = false
+                            }
+                        }
+                    )
+
+                    StatusBarView(
+                        document: appVM.editorViewModel.currentDocument,
+                        cursorPosition: appVM.editorViewModel.cursorPosition
+                    )
+                }
             }
+        }
+        .inspector(isPresented: $appVM.isAgentInspectorPresented) {
+            AgentPanelView(viewModel: appVM.agentPanelViewModel)
+                .inspectorColumnWidth(min: 260, ideal: 320, max: 700)
+                .toolbar {
+                    if appVM.isAgentInspectorPresented {
+                        AgentInspectorToolbarContent(appViewModel: appVM)
+                    }
+                }
         }
         .frame(minWidth: 800, minHeight: 500)
         .background {
             WindowTitlebarContent(id: "MainWindowTitlebarConfigurator") {
-                Color.clear
-                    .frame(height: 0)
+                EmptyView()
             }
         }
         .navigationTitle(windowTitle(for: appVM))
@@ -113,6 +116,27 @@ struct MainWindowView: View {
             print("➡️ Jumping to \(url.lastPathComponent):\(line):\(column)")
             appViewModel.openFile(at: url, line: line, column: column)
         }
+    }
+}
+
+// Background + bottom border for EditorTabBarView and EditorJumpBarView
+private struct EditorTopChromeView<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        content
+            .background(.bar)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill((colorScheme == .dark ? Color.white : Color.black).opacity(colorScheme == .dark ? 0.085 : 0.10))
+                    .frame(height: 1)
+            }
     }
 }
 

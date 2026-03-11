@@ -84,7 +84,7 @@ struct WindowTitlebarContent<Content: View>: NSViewRepresentable {
                 attachedWindow = window
                 self.titlebarContainer = titlebarContainer
                 titlebarContainer.addSubview(hostingView, positioned: .below, relativeTo: nil)
-                installConstraints(in: titlebarContainer, anchorView: anchorView)
+                installConstraints(in: titlebarContainer)
             }
 
             reportLeadingSafeArea(
@@ -95,9 +95,7 @@ struct WindowTitlebarContent<Content: View>: NSViewRepresentable {
 
         private func configureWindowAppearance(_ window: NSWindow) {
             window.titleVisibility = .hidden
-            window.titlebarAppearsTransparent = true
-            window.styleMask.insert(.fullSizeContentView)
-
+            window.titlebarSeparatorStyle = .none
         }
 
         func detach() {
@@ -108,17 +106,15 @@ struct WindowTitlebarContent<Content: View>: NSViewRepresentable {
             titlebarContainer = nil
         }
 
-        private func installConstraints(
-            in titlebarContainer: NSView,
-            anchorView: NSView
-        ) {
+        private func installConstraints(in titlebarContainer: NSView) {
             NSLayoutConstraint.deactivate(activeConstraints)
 
             let leading = hostingView.leadingAnchor.constraint(equalTo: titlebarContainer.leadingAnchor)
             let trailing = hostingView.trailingAnchor.constraint(equalTo: titlebarContainer.trailingAnchor)
-            let centerY = hostingView.centerYAnchor.constraint(equalTo: anchorView.centerYAnchor)
+            let top = hostingView.topAnchor.constraint(equalTo: titlebarContainer.topAnchor)
+            let bottom = hostingView.bottomAnchor.constraint(equalTo: titlebarContainer.bottomAnchor)
 
-            activeConstraints = [leading, trailing, centerY]
+            activeConstraints = [leading, trailing, top, bottom]
             NSLayoutConstraint.activate(activeConstraints)
         }
 

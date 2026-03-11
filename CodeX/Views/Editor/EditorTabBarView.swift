@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct EditorTabBarView: View {
+    static let height: CGFloat = 40
+
     @Bindable var viewModel: EditorViewModel
 
     var body: some View {
@@ -21,12 +23,7 @@ struct EditorTabBarView: View {
         }
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: 40)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(.white.opacity(0.05))
-                .frame(height: 1)
-        }
+        .frame(height: Self.height)
     }
 
     private func shouldShowTrailingDivider(after index: Int) -> Bool {
@@ -80,8 +77,8 @@ private struct TitlebarTabItemView: View {
         .overlay(alignment: .bottom) {
             if isSelected {
                 Capsule(style: .continuous)
-                    .fill(Color.accentColor.opacity(0.9))
-                    .frame(width: 28, height: 2)
+                    .fill(activeTint.opacity(0.8))
+                    .frame(width: 24, height: 1.5)
                     .padding(.bottom, 1)
             }
         }
@@ -99,6 +96,10 @@ private struct TitlebarTabItemView: View {
                 isHovering = hovering
             }
         }
+    }
+
+    private var activeTint: Color {
+        .accentColor
     }
 
     @ViewBuilder
@@ -121,29 +122,57 @@ private struct TitlebarTabBackground: View {
     let isSelected: Bool
     let isHovering: Bool
 
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var activeTint: Color {
+        .accentColor
+    }
+
     var body: some View {
         if isSelected {
-            Group {
-                if #available(macOS 26.0, *) {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(.clear)
-                        .glassEffect(.regular, in: .rect(cornerRadius: 10))
-                } else {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                }
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(.white.opacity(0.10))
-            }
-        } else if isHovering {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.white.opacity(0.05))
+                .fill(selectedFill)
                 .overlay {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(.white.opacity(0.07))
+                        .fill(selectedWash)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(selectedBorder)
+                }
+                .overlay(alignment: .bottom) {
+                    RoundedRectangle(cornerRadius: 1, style: .continuous)
+                        .fill(activeTint.opacity(colorScheme == .dark ? 0.58 : 0.66))
+                        .frame(width: 24, height: 1.5)
+                        .padding(.bottom, 1)
+                }
+        } else if isHovering {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(hoverFill)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(hoverBorder)
                 }
         }
+    }
+
+    private var selectedFill: Color {
+        colorScheme == .dark ? .white.opacity(0.072) : .black.opacity(0.05)
+    }
+
+    private var selectedWash: Color {
+        colorScheme == .dark ? .white.opacity(0.024) : .white.opacity(0.32)
+    }
+
+    private var selectedBorder: Color {
+        colorScheme == .dark ? .white.opacity(0.09) : .black.opacity(0.10)
+    }
+
+    private var hoverFill: Color {
+        colorScheme == .dark ? .white.opacity(0.042) : .black.opacity(0.034)
+    }
+
+    private var hoverBorder: Color {
+        colorScheme == .dark ? .white.opacity(0.055) : .black.opacity(0.06)
     }
 }

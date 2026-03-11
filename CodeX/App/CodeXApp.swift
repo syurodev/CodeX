@@ -10,8 +10,6 @@ struct CodeXApp: App {
             MainWindowView()
                 .environment(appViewModel)
                 .environment(appViewModel.settingsStore)
-                .containerBackground(.thinMaterial, for: .window)
-                .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
                 .onDisappear {
                     appViewModel.shutdownAgentRuntimes()
                 }

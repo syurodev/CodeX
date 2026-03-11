@@ -18,7 +18,6 @@ struct BranchPopoverView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
-            .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
             .cornerRadius(6)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)

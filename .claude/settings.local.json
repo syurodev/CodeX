@@ -16,7 +16,9 @@
       "Read(//Users/syuro/Library/Caches/org.swift.swiftpm/**)",
       "Bash(cd /Users/syuro/Workspace/PERSONAL/CodeX/Packages/CodeXEditor && swift package resolve && echo \"DONE\" && ls .build/checkouts/)",
       "Bash(find /Users/syuro/Workspace/PERSONAL/CodeX/Packages -type f -name \"*LayoutManager*\" -o -name \"*TextView*\" -path \"*/CodeEditTextView/*\" 2>/dev/null | head -20)",
-      "Bash(find /Users/syuro/Workspace/PERSONAL/CodeX/Packages/CodeEditTextView -type f -name \"*.swift\" 2>/dev/null | head -30)"
+      "Bash(find /Users/syuro/Workspace/PERSONAL/CodeX/Packages/CodeEditTextView -type f -name \"*.swift\" 2>/dev/null | head -30)",
+      "WebFetch(domain:medium.com)",
+      "WebFetch(domain:troz.net)"
     ]
   }
 }
