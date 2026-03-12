@@ -30,6 +30,10 @@ public final class CodeXEditorViewController: NSViewController {
 
     private let syntaxHighlighter = SyntaxHighlighter()
 
+    // MARK: - Bracket matching
+
+    private let bracketHighlighter = BracketMatchHighlighter()
+
     // MARK: - TextKit 2 stack
 
     private var contentStorage: NSTextContentStorage!
@@ -151,10 +155,10 @@ public final class CodeXEditorViewController: NSViewController {
             textView.isHorizontallyResizable = !newConfig.wrapLines
         }
 
-        // Re-apply highlighting if theme or font changed
-        if force || newConfig.theme != old.theme || newConfig.font != old.font {
-            syntaxHighlighter.update(theme: newConfig.theme, font: newConfig.font, language: _language)
-        }
+        // Always re-apply highlighting: CodeXTextView.applyConfiguration wipes syntax
+        // colours via setAttributes, but the NSTextStorageDelegate guard skips re-highlight
+        // for attribute-only edits, so we must drive it here every time config changes.
+        syntaxHighlighter.update(theme: newConfig.theme, font: newConfig.font, language: _language)
 
         layoutSubviews()
         gutterView.needsDisplay = true
@@ -175,6 +179,7 @@ public final class CodeXEditorViewController: NSViewController {
     public func setText(_ text: String) {
         guard let storage = textView.textStorage else { return }
         guard storage.string != text else { return }
+        bracketHighlighter.clearHighlights(in: textView)
 
         let cfg = configuration
         let paragraphStyle = NSMutableParagraphStyle()
@@ -299,5 +304,6 @@ extension CodeXEditorViewController: CodeXTextViewDelegate {
         _currentState = newState
         onStateChange?(_currentState)
         gutterView.selectionDidChange()
+        bracketHighlighter.update(in: textView)
     }
 }

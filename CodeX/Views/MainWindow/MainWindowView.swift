@@ -37,6 +37,7 @@ struct MainWindowView: View {
                 ZStack(alignment: .top) {
                     CodeEditorView(
                         viewModel: appVM.editorViewModel,
+                        topContentInset: appVM.editorViewModel.openDocuments.isEmpty ? 0 : EditorTabBarView.height + EditorJumpBarView.height,
                         bottomContentInset: appVM.isTerminalPanelPresented ? 0 : StatusBarView.height
                     )
                     .overlay(alignment: .bottom) {

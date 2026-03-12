@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 struct EditorJumpBarView: View {
-    static let height: CGFloat = 30
+    static let height: CGFloat = 26
 
     @Environment(AppViewModel.self) private var appViewModel
     let document: EditorDocument
@@ -13,9 +13,9 @@ struct EditorJumpBarView: View {
                 ForEach(Array(segments.enumerated()), id: \.element.id) { index, segment in
                     if index > 0 {
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 8, weight: .semibold))
+                            .font(.system(size: 7, weight: .semibold))
                             .foregroundStyle(.secondary.opacity(0.55))
-                            .padding(.horizontal, 5)
+                            .padding(.horizontal, 4)
                     }
 
                     JumpBarSegmentView(
@@ -29,7 +29,7 @@ struct EditorJumpBarView: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 4)
+            .padding(.vertical, 2)
         }
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -183,26 +183,31 @@ private struct JumpBarSegmentView: View {
             withAnimation(.easeInOut(duration: 0.12)) {
                 isHovering = hovering
             }
+            if hovering {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
         }
     }
 
     private var label: some View {
         HStack(spacing: 6) {
             Image(systemName: segment.iconName)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(segment.iconColor)
 
             Text(segment.title)
                 .lineLimit(1)
-                .font(.system(size: 12, weight: segment.isCurrent ? .semibold : .medium))
+                .font(.system(size: 11, weight: segment.isCurrent ? .semibold : .medium))
                 .foregroundStyle(segment.isCurrent ? .primary : .secondary)
 
             Image(systemName: "chevron.down")
-                .font(.system(size: 8, weight: .bold))
+                .font(.system(size: 7, weight: .bold))
                 .foregroundStyle(.secondary.opacity(0.75))
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.vertical, 3)
         .background {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(backgroundColor)

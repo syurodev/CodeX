@@ -6,10 +6,12 @@ struct CodeEditorView: View {
     @Environment(SettingsStore.self) private var settingsStore
     @Environment(\.colorScheme) private var colorScheme
     @Bindable var viewModel: EditorViewModel
+    let topContentInset: CGFloat
     let bottomContentInset: CGFloat
 
-    init(viewModel: EditorViewModel, bottomContentInset: CGFloat = 0) {
+    init(viewModel: EditorViewModel, topContentInset: CGFloat = 0, bottomContentInset: CGFloat = 0) {
         self.viewModel = viewModel
+        self.topContentInset = topContentInset
         self.bottomContentInset = bottomContentInset
     }
 
@@ -26,6 +28,7 @@ struct CodeEditorView: View {
                     SingleCodeEditorView(
                         document: document,
                         viewModel: viewModel,
+                        topContentInset: topContentInset,
                         bottomContentInset: bottomContentInset
                     )
                     .opacity(isActive ? 1 : 0)
@@ -39,6 +42,7 @@ struct CodeEditorView: View {
 struct SingleCodeEditorView: View {
     @Bindable var document: EditorDocument
     var viewModel: EditorViewModel
+    let topContentInset: CGFloat
     let bottomContentInset: CGFloat
     @Environment(\.colorScheme) private var colorScheme
 
@@ -62,7 +66,7 @@ struct SingleCodeEditorView: View {
                 language: document.language,
                 configuration: viewModel.editorConfiguration(
                     for: colorScheme,
-                    topContentInset: proxy.safeAreaInsets.top + 8,
+                    topContentInset: proxy.safeAreaInsets.top + topContentInset + 2,
                     bottomContentInset: proxy.safeAreaInsets.bottom + bottomContentInset
                 ),
                 state: stateBinding,
