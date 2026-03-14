@@ -117,9 +117,7 @@ final class GutterView: NSView {
         theme.gutterBackground.setFill()
         bounds.fill()
 
-        // Right-edge separator
-        NSColor.separatorColor.withAlphaComponent(0.3).setFill()
-        NSRect(x: bounds.width - 0.5, y: 0, width: 0.5, height: bounds.height).fill()
+        // Right-edge separator: ẩn
 
         let cursorLine = currentLineNumber(in: textView)
         let selectedLineRanges = selectedLineRanges(in: textView)

@@ -188,9 +188,13 @@ final class CodeXTextView: NSTextView {
             // Per-character advance including inter-character kern.
             let charWidth   = (" " as NSString).size(withAttributes: [.font: cfg.font]).width
             let charAdvance = charWidth + cfg.kern
-            let tabPx       = charAdvance * CGFloat(cfg.tabWidth)
             let guideColor  = cfg.theme.indentGuide
             let content     = string as NSString
+
+            // Detect actual indent unit used in the file (GCD of all non-zero indentations)
+            // so guides align correctly even when cfg.tabWidth != file indentation.
+            let indentUnit = detectFileIndentUnit(in: content, tabWidth: cfg.tabWidth)
+            let guidePx    = charAdvance * CGFloat(indentUnit)
 
             tlm.enumerateTextLayoutFragments(
                 from: tcs.documentRange.location,
@@ -229,7 +233,7 @@ final class CodeXTextView: NSTextView {
                     leadingSpaces = count
                 }
 
-                let levels = leadingSpaces / cfg.tabWidth
+                let levels = leadingSpaces / indentUnit
                 guard levels > 0 else { return true }
 
                 let glyphStartX = fragment.textLineFragments.first?.glyphOrigin.x ?? 0
@@ -239,11 +243,11 @@ final class CodeXTextView: NSTextView {
                 guideColor.setFill()
 
                 let nextIndentSpaces = findNextIndent(after: end, in: content, tabWidth: cfg.tabWidth)
-                let nextLevels = nextIndentSpaces / cfg.tabWidth
+                let nextLevels = nextIndentSpaces / indentUnit
                 
                 let loopEnd = max(levels, nextLevels)
                 for level in 0..<loopEnd {
-                    let x = baseX + CGFloat(level) * tabPx
+                    let x = baseX + CGFloat(level) * guidePx
                     let continuesDown = nextLevels > level
                     
                     if isWhitespaceOnly {
@@ -281,8 +285,8 @@ final class CodeXTextView: NSTextView {
                         let radius: CGFloat = 6.0
                         let kappa: CGFloat = 0.552284749831 // Ideal for circles
                         
-                        // endX = x + tabPx - 2: text bắt đầu tại x + tabPx (level tiếp theo)
-                        let endX = x + tabPx - 2.0
+                        // endX = x + guidePx - 2: text bắt đầu tại x + guidePx (level tiếp theo)
+                        let endX = x + guidePx - 2.0
                         
                         if continuesDown {
                             // ├─ shape (with curved branch)
@@ -307,11 +311,13 @@ final class CodeXTextView: NSTextView {
                         path.stroke()
                     } else {
                         // Case C: level >= levels — starter guide cho children
-                        // Phủ toàn bộ dòng parent (fragMinY → fragMaxY) để nối liền với children
+                        // Bắt đầu từ midY (giữa dòng parent, nơi dấu mở ngoặc nằm)
                         let path = NSBezierPath()
                         path.lineWidth = 1.5
                         path.setLineDash([3, 3], count: 2, phase: 0)
-                        path.move(to: NSPoint(x: x, y: fragMinY))
+                        let heightToUse = fragment.textLineFragments.first?.typographicBounds.height ?? fragH
+                        let midY = fragMinY + heightToUse / 2.0
+                        path.move(to: NSPoint(x: x, y: midY))
                         path.line(to: NSPoint(x: x, y: fragMaxY))
                         path.stroke()
                     }
@@ -379,6 +385,33 @@ final class CodeXTextView: NSTextView {
             else { break }
         }
         return count
+    }
+
+    /// Phát hiện indent unit thực tế của file bằng GCD của các mức indentation.
+    /// Tránh trường hợp cfg.tabWidth=4 nhưng file dùng 2-space indent.
+    private func detectFileIndentUnit(in content: NSString, tabWidth: Int) -> Int {
+        var result = 0
+        var searchIdx = 0
+        var linesChecked = 0
+        while searchIdx < content.length, linesChecked < 200 {
+            let lineRange = content.lineRange(for: NSRange(location: searchIdx, length: 0))
+            let text = content.substring(with: lineRange)
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let spaces = calculateLeadingSpaces(text, tabWidth: tabWidth)
+                if spaces > 0 {
+                    result = result == 0 ? spaces : gcd(result, spaces)
+                }
+            }
+            searchIdx = lineRange.location + lineRange.length
+            linesChecked += 1
+            if searchIdx >= content.length { break }
+        }
+        // Fallback về tabWidth nếu không detect được
+        return result == 0 ? tabWidth : max(1, result)
+    }
+
+    private func gcd(_ a: Int, _ b: Int) -> Int {
+        b == 0 ? a : gcd(b, a % b)
     }
 
 
