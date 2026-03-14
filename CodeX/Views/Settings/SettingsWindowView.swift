@@ -6,6 +6,7 @@ private enum SettingsSidebarItem: String, CaseIterable, Hashable, Identifiable {
     case themes
     case editor
     case terminal
+    case format
 
     var id: Self { self }
 
@@ -14,6 +15,7 @@ private enum SettingsSidebarItem: String, CaseIterable, Hashable, Identifiable {
         case .themes: "Themes"
         case .editor: "Editor"
         case .terminal: "Terminal"
+        case .format: "Format"
         }
     }
 
@@ -22,6 +24,7 @@ private enum SettingsSidebarItem: String, CaseIterable, Hashable, Identifiable {
         case .themes: "paintpalette"
         case .editor: "text.alignleft"
         case .terminal: "terminal"
+        case .format: "wand.and.sparkles"
         }
     }
 
@@ -30,6 +33,7 @@ private enum SettingsSidebarItem: String, CaseIterable, Hashable, Identifiable {
         case .themes: "Editor + terminal appearance"
         case .editor: "Editing behavior and layout"
         case .terminal: "Appearance and launcher"
+        case .format: "Prettier & format-on-save"
         }
     }
 }
@@ -53,6 +57,8 @@ struct SettingsWindowView: View {
                     EditorSettingsView(onSettingMutation: keepSettingsWindowInFront)
                 case .terminal:
                     TerminalSettingsView(onSettingMutation: keepSettingsWindowInFront)
+                case .format:
+                    FormatSettingsView(onSettingMutation: keepSettingsWindowInFront)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -331,6 +337,36 @@ private struct EditorSettingsView: View {
                     Divider()
 
                     SettingsControlRow(
+                        title: "Highlight current line",
+                        description: "Tint the background of the line containing the insertion point."
+                    ) {
+                        Toggle("Highlight current line", isOn: showCurrentLineHighlightBinding)
+                            .labelsHidden()
+                    }
+
+                    Divider()
+
+                    SettingsControlRow(
+                        title: "Indent guides",
+                        description: "Draw vertical lines at each indentation level within leading whitespace."
+                    ) {
+                        Toggle("Indent guides", isOn: showIndentGuidesBinding)
+                            .labelsHidden()
+                    }
+
+                    Divider()
+
+                    SettingsControlRow(
+                        title: "Gutter markers",
+                        description: "Show the marker lane to the left of line numbers for breakpoints and diagnostics."
+                    ) {
+                        Toggle("Gutter markers", isOn: showGutterMarkersBinding)
+                            .labelsHidden()
+                    }
+
+                    Divider()
+
+                    SettingsControlRow(
                         title: "Use theme background",
                         description: "Apply the selected theme background instead of the system text background color."
                     ) {
@@ -478,6 +514,36 @@ private struct EditorSettingsView: View {
             get: { settingsStore.settings.editor.use_system_cursor },
             set: { value in
                 updateEditor { $0.use_system_cursor = value }
+            }
+        )
+    }
+
+    private var showCurrentLineHighlightBinding: Binding<Bool> {
+        Binding(
+            get: { settingsStore.settings.editor.show_current_line_highlight },
+            set: { value in
+                updateEditor { $0.show_current_line_highlight = value }
+                onSettingMutation()
+            }
+        )
+    }
+
+    private var showIndentGuidesBinding: Binding<Bool> {
+        Binding(
+            get: { settingsStore.settings.editor.show_indent_guides },
+            set: { value in
+                updateEditor { $0.show_indent_guides = value }
+                onSettingMutation()
+            }
+        )
+    }
+
+    private var showGutterMarkersBinding: Binding<Bool> {
+        Binding(
+            get: { settingsStore.settings.editor.show_gutter_markers },
+            set: { value in
+                updateEditor { $0.show_gutter_markers = value }
+                onSettingMutation()
             }
         )
     }
@@ -870,6 +936,338 @@ private struct TerminalSettingsView: View {
             .fixedSize(horizontal: false, vertical: true)
             .frame(width: 320, alignment: .trailing)
             .textSelection(.enabled)
+    }
+}
+
+private struct FormatSettingsView: View {
+    @Environment(SettingsStore.self) private var settingsStore
+    let onSettingMutation: () -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                headerSection
+                prettierCard
+                defaultStyleCard
+                biomeCard
+                toolsCard
+                FormatPreviewView(config: settingsStore.settings.format.default_style)
+            }
+            .padding(28)
+            .frame(maxWidth: 920, alignment: .leading)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    // MARK: - Header
+
+    private var headerSection: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Format")
+                    .font(.largeTitle.weight(.semibold))
+                Text("Configure automatic code formatting. CodeX uses **Prettier** to format JS/TS files and **Biome** for linting. When a project has no config file, the defaults below are applied automatically — no files are created in your project.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 16)
+            Button("Reset Defaults") {
+                updateFormat { $0 = FormatSettings() }
+                updateTools  { $0 = ToolsSettings() }
+            }
+        }
+    }
+
+    // MARK: - Prettier card
+
+    private var prettierCard: some View {
+        SettingsCard(
+            title: "Prettier",
+            description: "Prettier formats .js, .jsx, .ts, and .tsx files. It rewrites the file in-place using your project's local config when available, or the defaults below when no config is found."
+        ) {
+            SettingsControlRow(
+                title: "Enable Prettier",
+                description: "Allow CodeX to invoke Prettier for JS/TS files. Disabling this also disables format-on-save."
+            ) {
+                Toggle("Enable Prettier", isOn: enablePrettierBinding).labelsHidden()
+            }
+            Divider()
+            SettingsControlRow(
+                title: "Format on save",
+                description: "Automatically run Prettier every time a supported file is saved (⌘S)."
+            ) {
+                Toggle("Format on save", isOn: formatOnSaveBinding)
+                    .labelsHidden()
+                    .disabled(!settingsStore.settings.format.enable_prettier_js_ts)
+            }
+        }
+    }
+
+    // MARK: - Default Style card
+
+    private var defaultStyleCard: some View {
+        SettingsCard(
+            title: "Default Style",
+            description: "These options are used as fallback when your project has no Prettier or Biome config file. They are passed directly to the formatter — no config files are created in your project."
+        ) {
+            SettingsControlRow(title: "Tab width", description: "Number of spaces per indentation level.") {
+                Stepper(value: tabWidthBinding, in: 1...8) {
+                    Text("\(settingsStore.settings.format.default_style.tab_width) spaces")
+                        .monospacedDigit()
+                        .frame(width: 64, alignment: .trailing)
+                }
+            }
+            Divider()
+            SettingsControlRow(title: "Print width", description: "Wrap lines that exceed this column count.") {
+                Stepper(value: printWidthBinding, in: 40...200, step: 10) {
+                    Text("\(settingsStore.settings.format.default_style.print_width) cols")
+                        .monospacedDigit()
+                        .frame(width: 64, alignment: .trailing)
+                }
+            }
+            Divider()
+            SettingsControlRow(title: "Single quotes", description: "Use single quotes instead of double quotes for strings.") {
+                Toggle("Single quotes", isOn: singleQuoteBinding).labelsHidden()
+            }
+            Divider()
+            SettingsControlRow(title: "Semicolons", description: "Add a semicolon at the end of every statement.") {
+                Toggle("Semicolons", isOn: semicolonsBinding).labelsHidden()
+            }
+            Divider()
+            SettingsControlRow(title: "Trailing commas", description: "Add trailing commas where valid in multi-line constructs.") {
+                Picker("Trailing commas", selection: trailingCommaBinding) {
+                    ForEach(TrailingCommaStyle.allCases) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 180)
+                .labelsHidden()
+            }
+        }
+    }
+
+    // MARK: - Biome card
+
+    private var biomeCard: some View {
+        SettingsCard(
+            title: "Biome  ·  Linter",
+            description: "Biome is a fast linter and formatter bundled with CodeX. It runs automatically in the background as you type and highlights issues in the editor. Biome uses the same Default Style settings above when your project has no biome.json — no files are created in your project."
+        ) {
+            HStack(spacing: 10) {
+                Image(systemName: "checkmark.seal.fill")
+                    .foregroundStyle(.green)
+                Text("Biome is bundled with CodeX and always active for JS/TS/JSX/TSX files.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    // MARK: - Tools card
+
+    private var toolsCard: some View {
+        SettingsCard(
+            title: "Tools",
+            description: "Override the paths to the Prettier and Biome executables. Leave empty to use the bundled binary or PATH resolution."
+        ) {
+            SettingsControlRow(
+                title: "Prettier path",
+                description: "Absolute path to the prettier binary. Leave empty to resolve via PATH."
+            ) {
+                TextField("/usr/bin/env prettier (default)", text: prettierPathBinding)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(width: 300)
+            }
+            Divider()
+            SettingsControlRow(
+                title: "Biome path",
+                description: "Absolute path to the biome binary. Leave empty to use the bundled binary."
+            ) {
+                TextField("Bundled biome (default)", text: biomePathBinding)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(width: 300)
+            }
+        }
+    }
+
+    // MARK: - Bindings
+
+    private var enablePrettierBinding: Binding<Bool> {
+        Binding(
+            get: { settingsStore.settings.format.enable_prettier_js_ts },
+            set: { value in
+                updateFormat { $0.enable_prettier_js_ts = value }
+                if !value { updateFormat { $0.format_on_save_js_ts = false } }
+            }
+        )
+    }
+
+    private var formatOnSaveBinding: Binding<Bool> {
+        Binding(
+            get: { settingsStore.settings.format.format_on_save_js_ts },
+            set: { value in updateFormat { $0.format_on_save_js_ts = value } }
+        )
+    }
+
+    private var tabWidthBinding: Binding<Int> {
+        Binding(
+            get: { settingsStore.settings.format.default_style.tab_width },
+            set: { value in updateFormat { $0.default_style.tab_width = value } }
+        )
+    }
+
+    private var printWidthBinding: Binding<Int> {
+        Binding(
+            get: { settingsStore.settings.format.default_style.print_width },
+            set: { value in updateFormat { $0.default_style.print_width = value } }
+        )
+    }
+
+    private var singleQuoteBinding: Binding<Bool> {
+        Binding(
+            get: { settingsStore.settings.format.default_style.single_quote },
+            set: { value in updateFormat { $0.default_style.single_quote = value } }
+        )
+    }
+
+    private var semicolonsBinding: Binding<Bool> {
+        Binding(
+            get: { settingsStore.settings.format.default_style.semicolons },
+            set: { value in updateFormat { $0.default_style.semicolons = value } }
+        )
+    }
+
+    private var trailingCommaBinding: Binding<TrailingCommaStyle> {
+        Binding(
+            get: { settingsStore.settings.format.default_style.trailing_comma },
+            set: { value in updateFormat { $0.default_style.trailing_comma = value } }
+        )
+    }
+
+    private var prettierPathBinding: Binding<String> {
+        Binding(
+            get: { settingsStore.settings.tools.prettier_path },
+            set: { value in updateTools { $0.prettier_path = value } }
+        )
+    }
+
+    private var biomePathBinding: Binding<String> {
+        Binding(
+            get: { settingsStore.settings.tools.biome_path },
+            set: { value in updateTools { $0.biome_path = value } }
+        )
+    }
+
+    private func updateFormat(_ mutate: (inout FormatSettings) -> Void) {
+        settingsStore.updateFormat(mutate)
+        onSettingMutation()
+    }
+
+    private func updateTools(_ mutate: (inout ToolsSettings) -> Void) {
+        settingsStore.updateTools(mutate)
+        onSettingMutation()
+    }
+}
+
+// MARK: - Format Preview
+
+private struct FormatPreviewView: View {
+    let config: DefaultFormatConfig
+
+    @Environment(SettingsStore.self) private var settingsStore
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var editorState = EditorState()
+
+    private var sampleCode: String {
+        let q = config.single_quote ? "'" : "\""
+        let semi = config.semicolons ? ";" : ""
+        let indent = String(repeating: " ", count: config.tab_width)
+        let trailingComma: String
+        switch config.trailing_comma {
+        case .none: trailingComma = ""
+        case .es5, .all: trailingComma = ","
+        }
+        return """
+        import { useState, useEffect } from \(q)react\(q)\(semi)
+
+        interface User {
+        \(indent)id: number\(semi)
+        \(indent)name: string\(semi)
+        \(indent)email: string\(semi)
+        }
+
+        export function UserCard({ user }: { user: User }) {
+        \(indent)const [active, setActive] = useState(false)\(semi)
+
+        \(indent)useEffect(() => {
+        \(indent)\(indent)setActive(user.id > 0)\(semi)
+        \(indent)}, [user.id]\(trailingComma))\(semi)
+
+        \(indent)return (
+        \(indent)\(indent)<div className={\(q)card\(q)}>
+        \(indent)\(indent)\(indent)<h2>{user.name}</h2>
+        \(indent)\(indent)\(indent)<p>{user.email}</p>
+        \(indent)\(indent)</div>
+        \(indent))\(semi)
+        }
+        """
+    }
+
+    private var previewConfiguration: EditorConfiguration {
+        EditorConfiguration(
+            font: NSFont(name: "SFMono-Regular", size: 12)
+                ?? .monospacedSystemFont(ofSize: 12, weight: .regular),
+            lineHeightMultiple: 1.4,
+            letterSpacing: 1.0,
+            tabWidth: config.tab_width,
+            wrapLines: false,
+            isEditable: false,
+            useSystemCursor: false,
+            showLineNumbers: true,
+            showMinimap: false,
+            showCurrentLineHighlight: false,
+            showIndentGuides: true,
+            showGutterMarkers: false,
+            useThemeBackground: true,
+            theme: settingsStore.settings.editorTheme.resolvedTheme(for: colorScheme),
+            contentInsets: NSEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "eye")
+                    .foregroundStyle(.secondary)
+                Text("Preview")
+                    .font(.headline)
+                Text("— how your defaults affect code style")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            CodeXEditorView(
+                text: .constant(sampleCode),
+                language: .typescript,
+                configuration: previewConfiguration,
+                state: $editorState
+            )
+            .frame(height: 280)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+            )
+
+            Text("Preview is illustrative — actual output may differ based on Prettier/Biome processing.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
     }
 }
 

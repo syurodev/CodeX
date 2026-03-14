@@ -37,6 +37,14 @@ final class SettingsStore {
         update { mutate(&$0.terminal) }
     }
 
+    func updateFormat(_ mutate: (inout FormatSettings) -> Void) {
+        update { mutate(&$0.format) }
+    }
+
+    func updateTools(_ mutate: (inout ToolsSettings) -> Void) {
+        update { mutate(&$0.tools) }
+    }
+
     func setEditorTheme(_ preference: EditorThemePreference) {
         update { $0.editorTheme = preference }
     }

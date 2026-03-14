@@ -18,7 +18,15 @@
       "Bash(find /Users/syuro/Workspace/PERSONAL/CodeX/Packages -type f -name \"*LayoutManager*\" -o -name \"*TextView*\" -path \"*/CodeEditTextView/*\" 2>/dev/null | head -20)",
       "Bash(find /Users/syuro/Workspace/PERSONAL/CodeX/Packages/CodeEditTextView -type f -name \"*.swift\" 2>/dev/null | head -30)",
       "WebFetch(domain:medium.com)",
-      "WebFetch(domain:troz.net)"
+      "WebFetch(domain:troz.net)",
+      "Bash(xcodebuild -scheme CodeX -destination 'platform=macOS' build 2>&1 | tail -30)",
+      "Bash(xcodebuild -scheme CodeX -destination 'platform=macOS' build 2>&1 | grep -E \"error:|warning:\" | grep -v \"^$\" | head -10)",
+      "Bash(xcodebuild -scheme CodeX -destination 'platform=macOS' build 2>&1 | grep -E \"error:|Build succeeded|Build FAILED\" | head -20)",
+      "Bash(xcodebuild -scheme CodeX -destination 'platform=macOS' build 2>&1 | grep -E \"error:|warning:|succeeded|FAILED\" | grep -v \"^$\" | tail -5)",
+      "Bash(xcodebuild -scheme CodeX -destination 'platform=macOS' build 2>&1 | grep -c \"error:\" ; xcodebuild -scheme CodeX -destination 'platform=macOS' build 2>&1 | grep \"BUILD\")",
+      "Bash(xcodebuild -scheme CodeX -destination 'platform=macOS' build 2>&1 | grep -E \"error:|succeeded|FAILED\" | tail -5)",
+      "Bash(xcodebuild -scheme CodeX -destination 'platform=macOS' build 2>&1 | grep \"BUILD\")",
+      "Bash(xcodebuild -scheme CodeX -destination 'platform=macOS' build 2>&1 | grep -E \"error:|BUILD\" | grep -v \"^$\")"
     ]
   }
 }

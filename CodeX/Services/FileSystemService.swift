@@ -35,7 +35,19 @@ struct FileSystemService {
         try String(contentsOf: url, encoding: .utf8)
     }
 
+    func writeFile(text: String, to url: URL) throws {
+        try text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
     func detectLanguage(for url: URL) -> CodeLanguage {
-        CodeLanguage.detectLanguageFrom(url: url)
+        let ext = url.pathExtension.lowercased()
+        switch ext {
+        case "js", "jsx":
+            return .javascript
+        case "ts", "tsx":
+            return .typescript
+        default:
+            return .javascript
+        }
     }
 }

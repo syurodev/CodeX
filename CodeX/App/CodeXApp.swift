@@ -29,7 +29,7 @@ struct CodeXApp: App {
 
             CommandGroup(replacing: .saveItem) {
                 Button("Save") {
-                    // Cần link với save logic sau này
+                    appViewModel.saveCurrentDocument()
                 }
                 .keyboardShortcut("s", modifiers: .command)
             }

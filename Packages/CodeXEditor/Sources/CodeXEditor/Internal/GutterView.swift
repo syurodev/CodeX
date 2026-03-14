@@ -16,6 +16,16 @@ final class GutterView: NSView {
         didSet { needsDisplay = true }
     }
 
+    // MARK: - Markers
+
+    var markers: [Int: GutterMarkerKind] = [:] {
+        didSet { needsDisplay = true }
+    }
+
+    /// Called when the user clicks the marker lane to toggle a marker.
+    /// `marker` is `nil` when the marker was removed.
+    var onMarkerToggled: ((Int, GutterMarkerKind?) -> Void)?
+
     // MARK: - State
 
     var lineCount: Int = 1 {
@@ -39,6 +49,7 @@ final class GutterView: NSView {
 
     private var trackingArea: NSTrackingArea?
     private var hoveredLine: Int?
+    private var isHoveringMarkerLane: Bool = false
     private var lineNumberHighlightProgress: [Int: CGFloat] = [:]
     private var lineNumberTargetProgress: [Int: CGFloat] = [:]
     private var lineNumberAnimationTimer: Timer?
@@ -62,12 +73,15 @@ final class GutterView: NSView {
 
     // MARK: - Width
 
+    static let markerLaneWidth: CGFloat = 16
+
     func preferredWidth(for lineCount: Int) -> CGFloat {
         let digits = max(3, "\(lineCount)".count)
         let digitWidth = ("0" as NSString).size(
             withAttributes: [.font: configuration.lineNumberFont]
         ).width
-        return CGFloat(digits) * digitWidth + 24
+        let markerLane: CGFloat = configuration.showGutterMarkers ? GutterView.markerLaneWidth : 0
+        return markerLane + CGFloat(digits) * digitWidth + 24
     }
 
     // MARK: - Tracking Area
@@ -159,6 +173,23 @@ final class GutterView: NSView {
                 gutterRow.fill()
             }
 
+            // Marker (breakpoint / error / warning / info) or ghost on hover
+            if self.configuration.showGutterMarkers {
+                let size: CGFloat = 8
+                let x = (GutterView.markerLaneWidth - size) / 2
+                let y = round(gutterRow.midY - size / 2)
+                let markerRect = CGRect(x: x, y: y, width: size, height: size)
+
+                if let marker = self.markers[lineNumber] {
+                    marker.color.setFill()
+                    NSBezierPath(ovalIn: markerRect).fill()
+                } else if self.isHoveringMarkerLane && lineNumber == self.hoveredLine {
+                    // Ghost marker: shows affordance that this line is clickable
+                    GutterMarkerKind.breakpoint.color.withAlphaComponent(0.35).setFill()
+                    NSBezierPath(ovalIn: markerRect).fill()
+                }
+            }
+
             // Optically center the line number inside the row.
             //
             // The code text is already vertically centered in its fragment via
@@ -200,9 +231,17 @@ final class GutterView: NSView {
     // MARK: - Mouse Events
 
     override func mouseDown(with event: NSEvent) {
-        guard let textView else { return }
         let pt = convert(event.locationInWindow, from: nil)
         guard let entry = lineHitData.first(where: { $0.rect.contains(pt) }) else { return }
+
+        // Click in marker lane → toggle breakpoint on that line
+        if configuration.showGutterMarkers && pt.x < GutterView.markerLaneWidth {
+            toggleBreakpoint(on: entry.line)
+            return
+        }
+
+        // Click in line number area → select full line
+        guard let textView else { return }
         let fullLine = (textView.string as NSString).lineRange(for: NSRange(location: entry.range.location, length: 0))
         textView.setSelectedRanges([NSValue(range: fullLine)], affinity: .downstream, stillSelecting: false)
         textView.scrollRangeToVisible(fullLine)
@@ -212,6 +251,8 @@ final class GutterView: NSView {
     override func mouseDragged(with event: NSEvent) {
         guard let textView else { return }
         let pt = convert(event.locationInWindow, from: nil)
+        // Dragging in the marker lane doesn't extend selection
+        guard pt.x >= GutterView.markerLaneWidth || !configuration.showGutterMarkers else { return }
         guard let entry = lineHitData.first(where: { $0.rect.contains(pt) }),
               let anchor = textView.selectedRanges.first?.rangeValue else { return }
         let dragLine = (textView.string as NSString).lineRange(for: NSRange(location: entry.range.location, length: 0))
@@ -219,14 +260,47 @@ final class GutterView: NSView {
         textView.setSelectedRanges([NSValue(range: combined)], affinity: .downstream, stillSelecting: false)
     }
 
+    override func mouseEntered(with event: NSEvent) {
+        updateHoverState(at: convert(event.locationInWindow, from: nil))
+    }
+
     override func mouseMoved(with event: NSEvent) {
-        let pt  = convert(event.locationInWindow, from: nil)
-        let hit = lineHitData.first(where: { $0.rect.contains(pt) })?.line
-        if hit != hoveredLine { hoveredLine = hit; needsDisplay = true }
+        updateHoverState(at: convert(event.locationInWindow, from: nil))
     }
 
     override func mouseExited(with event: NSEvent) {
-        if hoveredLine != nil { hoveredLine = nil; needsDisplay = true }
+        NSCursor.arrow.set()
+        var dirty = false
+        if hoveredLine != nil         { hoveredLine = nil;           dirty = true }
+        if isHoveringMarkerLane       { isHoveringMarkerLane = false; dirty = true }
+        if dirty { needsDisplay = true }
+    }
+
+    private func updateHoverState(at pt: CGPoint) {
+        let hit = lineHitData.first(where: { $0.rect.contains(pt) })?.line
+
+        var dirty = false
+        if hit != hoveredLine { hoveredLine = hit; dirty = true }
+
+        if configuration.showGutterMarkers {
+            let inLane = pt.x < GutterView.markerLaneWidth
+            if inLane != isHoveringMarkerLane { isHoveringMarkerLane = inLane; dirty = true }
+            if inLane { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
+        }
+
+        if dirty { needsDisplay = true }
+    }
+
+    // MARK: - Marker toggling
+
+    private func toggleBreakpoint(on line: Int) {
+        if markers[line] != nil {
+            markers.removeValue(forKey: line)
+            onMarkerToggled?(line, nil)
+        } else {
+            markers[line] = .breakpoint
+            onMarkerToggled?(line, .breakpoint)
+        }
     }
 
     // MARK: - External notifications

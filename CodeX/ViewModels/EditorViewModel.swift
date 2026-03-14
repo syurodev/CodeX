@@ -28,9 +28,21 @@ class EditorViewModel {
 
     func documentTextChanged(id: UUID, newText: String) {
         if let index = openDocuments.firstIndex(where: { $0.id == id }) {
-            syncTextWithLSP(url: openDocuments[index].url, text: newText)
-            triggerLint(url: openDocuments[index].url)
+            let doc = openDocuments[index]
+            syncTextWithLSP(url: doc.url, text: newText)
+            triggerLint(url: doc.url)
+            
+            // Re-fetch symbols on text change (debounced implicitly in some cases, or we can just call it)
+            if let root = appViewModelProjectRoot() {
+                doc.fetchSymbolsIfSupported(projectRoot: root)
+            }
         }
+    }
+    
+    // Helper to get project root since EditorViewModel might not store it directly
+    private func appViewModelProjectRoot() -> URL? {
+        // Fallback: use the deletingLastPathComponent of the first doc if we don't have it.
+        return openDocuments.first?.url.deletingLastPathComponent()
     }
 
     private var lspService: LanguageClientService?
@@ -78,18 +90,21 @@ class EditorViewModel {
         }
 
         let config = EditorConfiguration(
-            font:                editorSettings.resolved_font,
-            lineHeightMultiple:  editorSettings.line_height_multiple,
-            letterSpacing:       editorSettings.letter_spacing,
-            tabWidth:            editorSettings.tab_width,
-            wrapLines:           editorSettings.wrap_lines,
-            isEditable:          true,
-            useSystemCursor:     editorSettings.use_system_cursor,
-            showLineNumbers:     editorSettings.show_line_numbers,
-            showMinimap:         editorSettings.show_minimap,
-            useThemeBackground:  editorSettings.use_theme_background,
-            theme:               appSettings.editorTheme.resolvedTheme(for: colorScheme),
-            contentInsets:       NSEdgeInsets(top: top, left: 0, bottom: bottom, right: 0)
+            font:                        editorSettings.resolved_font,
+            lineHeightMultiple:          editorSettings.line_height_multiple,
+            letterSpacing:               editorSettings.letter_spacing,
+            tabWidth:                    editorSettings.tab_width,
+            wrapLines:                   editorSettings.wrap_lines,
+            isEditable:                  true,
+            useSystemCursor:             editorSettings.use_system_cursor,
+            showLineNumbers:             editorSettings.show_line_numbers,
+            showMinimap:                 editorSettings.show_minimap,
+            showCurrentLineHighlight:    editorSettings.show_current_line_highlight,
+            showIndentGuides:            editorSettings.show_indent_guides,
+            showGutterMarkers:           editorSettings.show_gutter_markers,
+            useThemeBackground:          editorSettings.use_theme_background,
+            theme:                       appSettings.editorTheme.resolvedTheme(for: colorScheme),
+            contentInsets:               NSEdgeInsets(top: top, left: 0, bottom: bottom, right: 0)
         )
         _cachedConfig = config
         _cachedSettings = appSettings
@@ -129,6 +144,9 @@ class EditorViewModel {
                 startLSP(for: url, projectRoot: projectRoot)
             } else {
                 sendDidOpen(for: url)
+                // Trigger symbol extraction right after opening
+                let root = projectRoot ?? url.deletingLastPathComponent()
+                newDoc.fetchSymbolsIfSupported(projectRoot: root)
             }
 
             selectDocument(id: newDoc.id)
@@ -151,7 +169,10 @@ class EditorViewModel {
                         "textDocument": [
                             "completion": ["completionItem": ["snippetSupport": true]],
                             "definition": ["dynamicRegistration": true],
-                            "hover": ["contentFormat": ["markdown", "plaintext"]]
+                            "hover": ["contentFormat": ["markdown", "plaintext"]],
+                            "documentSymbol": [
+                                "hierarchicalDocumentSymbolSupport": true
+                            ]
                         ],
                         "workspace": [
                             "configuration": true,
@@ -170,6 +191,11 @@ class EditorViewModel {
                 let _ = await service.initialize(params: initParams)
             }
             sendDidOpen(for: url)
+            
+            // After initialzing and sending didOpen, trigger fetch symbols
+            if let doc = self.openDocuments.first(where: { $0.url == url }) {
+                doc.fetchSymbolsIfSupported(projectRoot: root)
+            }
         }
     }
 
@@ -193,10 +219,27 @@ class EditorViewModel {
     }
 
     private func triggerLint(url: URL) {
+        let projectRoot = appViewModelProjectRoot()
+        let formatConfig = settingsStore.settings.format.default_style
         Task {
-            if let result = await BiomeService.shared.lint(fileURL: url) {
+            if let result = await BiomeService.shared.lint(fileURL: url, projectRoot: projectRoot, formatConfig: formatConfig) {
                 print("Linter results: \(result)")
             }
+        }
+    }
+
+    /// Saves the current document's in-memory text back to disk.
+    /// Returns `true` if the save succeeded, `false` otherwise.
+    @discardableResult
+    func saveCurrentDocument(using fileService: FileSystemService) -> Bool {
+        guard let doc = currentDocument else { return false }
+        do {
+            try fileService.writeFile(text: doc.text, to: doc.url)
+            doc.isModified = false
+            return true
+        } catch {
+            print("❌ Save failed for \(doc.fileName): \(error)")
+            return false
         }
     }
 

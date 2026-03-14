@@ -9,6 +9,9 @@ public final class CodeXEditorViewController: NSViewController {
 
     public var onTextChange: ((String) -> Void)?
     public var onStateChange: ((EditorState) -> Void)?
+    /// Called when the user toggles a marker by clicking the gutter lane.
+    /// `marker` is `nil` when removed, non-nil when added.
+    public var onMarkerToggled: ((Int, GutterMarkerKind?) -> Void)?
 
     // MARK: - Configuration
 
@@ -93,6 +96,9 @@ public final class CodeXEditorViewController: NSViewController {
         gutterView.scrollView = scrollView
         gutterView.autoresizingMask = [.height]
         gutterView.preferredWidthDidChange = { [weak self] _ in self?.layoutSubviews() }
+        gutterView.onMarkerToggled = { [weak self] line, marker in
+            self?.onMarkerToggled?(line, marker)
+        }
 
         minimapView = MinimapView()
         minimapView.textView = textView
@@ -207,6 +213,21 @@ public final class CodeXEditorViewController: NSViewController {
         minimapView.syncFromEditor()
     }
 
+    // MARK: - Gutter Markers
+
+    public func setMarker(_ marker: GutterMarkerKind, forLine line: Int) {
+        gutterView.markers[line] = marker
+    }
+
+    public func clearMarker(forLine line: Int) {
+        gutterView.markers.removeValue(forKey: line)
+    }
+
+    public func clearAllMarkers() {
+        gutterView.markers.removeAll()
+        gutterView.needsDisplay = true
+    }
+
     public func applyState(_ state: EditorState) {
         if state.scrollPosition != _currentState.scrollPosition {
             scrollView.contentView.scroll(to: state.scrollPosition)
@@ -305,5 +326,7 @@ extension CodeXEditorViewController: CodeXTextViewDelegate {
         onStateChange?(_currentState)
         gutterView.selectionDidChange()
         bracketHighlighter.update(in: textView)
+        // Redraw text view so current line highlight and indent guides update.
+        textView.needsDisplay = true
     }
 }

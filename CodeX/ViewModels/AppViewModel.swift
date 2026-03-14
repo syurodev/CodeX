@@ -1,5 +1,6 @@
 import SwiftUI
 import CodeXEditor
+import Foundation
 
 @MainActor
 @Observable
@@ -19,16 +20,31 @@ class AppViewModel {
 
     private let fileSystemService = FileSystemService()
     private let gitService = GitService()
+    private var codeFormatService: CodeFormatService
 
     init() {
         let settingsStore = SettingsStore()
         self.settingsStore = settingsStore
         self.editorViewModel = EditorViewModel(settingsStore: settingsStore)
+        let prettierPath = settingsStore.settings.tools.prettier_path
+        self.codeFormatService = CodeFormatService(prettierPath: prettierPath.isEmpty ? nil : prettierPath)
+        syncToolPaths()
     }
 
     init(settingsStore: SettingsStore) {
         self.settingsStore = settingsStore
         self.editorViewModel = EditorViewModel(settingsStore: settingsStore)
+        let prettierPath = settingsStore.settings.tools.prettier_path
+        self.codeFormatService = CodeFormatService(prettierPath: prettierPath.isEmpty ? nil : prettierPath)
+        syncToolPaths()
+    }
+
+    /// Sync custom tool paths from ToolsSettings into the format services.
+    /// Call this after any ToolsSettings mutation.
+    func syncToolPaths() {
+        let tools = settingsStore.settings.tools
+        codeFormatService.prettierPath = tools.prettier_path.isEmpty ? nil : tools.prettier_path
+        BiomeService.shared.customBiomePath = tools.biome_path
     }
 
     var projectName: String {
@@ -143,6 +159,56 @@ class AppViewModel {
     func shutdownAgentRuntimes() {
         agentPanelViewModel.shutdownAllRuntimes()
     }
+    
+    func saveCurrentDocument() {
+        guard let currentURL = editorViewModel.currentDocument?.url else { return }
+        let formatOnSave = settingsStore.settings.format.format_on_save_js_ts
+        let prettierEnabled = settingsStore.settings.format.enable_prettier_js_ts
+
+        if formatOnSave && prettierEnabled && codeFormatService.isSupported(url: currentURL) {
+            // Format first (prettier --write rewrites disk), then reload + save marks isModified=false
+            formatCurrentFile()
+        } else {
+            editorViewModel.saveCurrentDocument(using: fileSystemService)
+        }
+    }
+
+    func formatCurrentFile() {
+        guard let currentURL = editorViewModel.currentDocument?.url else { return }
+        guard settingsStore.settings.format.enable_prettier_js_ts else { return }
+        guard codeFormatService.isSupported(url: currentURL) else { return }
+        let cursorPositions = editorViewModel.editorState.cursorPositions
+        let formatConfig = settingsStore.settings.format.default_style
+        do {
+            let result = try codeFormatService.formatFile(at: currentURL, workingDirectory: project?.rootURL, formatConfig: formatConfig)
+            editorViewModel.openDocument(from: currentURL, projectRoot: project?.rootURL, using: fileSystemService)
+            editorViewModel.editorState.cursorPositions = cursorPositions
+            if !result.stderr.isEmpty {
+                print("Prettier stderr: \(result.stderr)")
+            }
+        } catch {
+            print("Format error: \(error)")
+        }
+    }
+
+    func formatProject() {
+        guard let root = project?.rootURL else { return }
+        guard settingsStore.settings.format.enable_prettier_js_ts else { return }
+        let formatConfig = settingsStore.settings.format.default_style
+        let results = codeFormatService.formatProject(at: root, formatConfig: formatConfig)
+        // Reload file tree and any open docs possibly affected
+        refreshFileTree()
+        // If current file was formatted, reload it and restore cursor
+        if let currentURL = editorViewModel.currentDocument?.url, results.contains(where: { $0.url == currentURL }) {
+            let cursorPositions = editorViewModel.editorState.cursorPositions
+            editorViewModel.openDocument(from: currentURL, projectRoot: project?.rootURL, using: fileSystemService)
+            editorViewModel.editorState.cursorPositions = cursorPositions
+        }
+        // Log errors if any
+        for res in results where !res.stderr.isEmpty {
+            print("Prettier stderr (\(res.url.lastPathComponent)): \(res.stderr)")
+        }
+    }
 
     deinit {
         MainActor.assumeIsolated {
@@ -151,3 +217,4 @@ class AppViewModel {
         }
     }
 }
+

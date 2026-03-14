@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import CodeXEditor
 
 struct EditorJumpBarView: View {
     static let height: CGFloat = 26
@@ -8,30 +9,43 @@ struct EditorJumpBarView: View {
     let document: EditorDocument
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 0) {
-                ForEach(Array(segments.enumerated()), id: \.element.id) { index, segment in
-                    if index > 0 {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 7, weight: .semibold))
-                            .foregroundStyle(.secondary.opacity(0.55))
-                            .padding(.horizontal, 4)
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
+                    ForEach(Array(segments.enumerated()), id: \.element.id) { index, segment in
+                        if index > 0 {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 7, weight: .semibold))
+                                .foregroundStyle(.secondary.opacity(0.55))
+                                .padding(.horizontal, 4)
+                        }
+                        JumpBarSegmentView(
+                            document: document,
+                            segment: segment,
+                            menuEntries: menuEntries(for: segment),
+                            onActivate: handleActivate,
+                            onReveal: revealInFinder,
+                            onCopyRelativePath: copyRelativePath,
+                            onCopyFullPath: copyFullPath
+                        )
+                        .id(segment.id)
                     }
-
-                    JumpBarSegmentView(
-                        segment: segment,
-                        menuEntries: menuEntries(for: segment),
-                        onActivate: handleActivate,
-                        onReveal: revealInFinder,
-                        onCopyRelativePath: copyRelativePath,
-                        onCopyFullPath: copyFullPath
-                    )
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 2)
+            }
+            .scrollDisabled(true)
+            .onAppear {
+                if let last = segments.last {
+                    proxy.scrollTo(last.id, anchor: .trailing)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 2)
+            .onChange(of: segments.last?.id) {
+                if let last = segments.last {
+                    proxy.scrollTo(last.id, anchor: .trailing)
+                }
+            }
         }
-        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: Self.height)
     }
@@ -69,7 +83,18 @@ struct EditorJumpBarView: View {
                     title: component,
                     url: currentURL,
                     kind: isFile ? .file : .folder,
-                    isCurrent: isFile
+                    isCurrent: isFile && document.currentSymbol == nil
+                )
+            )
+        }
+        
+        if let symbol = document.currentSymbol {
+            builtSegments.append(
+                JumpBarSegment(
+                    title: symbol.name,
+                    url: fileURL,
+                    kind: .symbol(symbol),
+                    isCurrent: true
                 )
             )
         }
@@ -79,13 +104,23 @@ struct EditorJumpBarView: View {
 
     private func fallbackSegments(for fileURL: URL) -> [JumpBarSegment] {
         let parentURL = fileURL.deletingLastPathComponent()
-        return [
+        var segments = [
             JumpBarSegment(title: parentURL.lastPathComponent, url: parentURL, kind: .folder, isCurrent: false),
-            JumpBarSegment(title: fileURL.lastPathComponent, url: fileURL, kind: .file, isCurrent: true)
+            JumpBarSegment(title: fileURL.lastPathComponent, url: fileURL, kind: .file, isCurrent: document.currentSymbol == nil)
         ]
+        if let symbol = document.currentSymbol {
+            segments.append(JumpBarSegment(title: symbol.name, url: fileURL, kind: .symbol(symbol), isCurrent: true))
+        }
+        return segments
     }
 
-    private func menuEntries(for segment: JumpBarSegment) -> [URL] {
+    // Trả về mảng Any chứa URL hoặc DocumentSymbol để hiển thị trong Menu
+    private func menuEntries(for segment: JumpBarSegment) -> [Any] {
+        if case .symbol = segment.kind {
+            // Hiển thị toàn bộ symbol ở root file
+            return document.symbols
+        }
+
         guard let baseURL = segment.menuDirectoryURL else { return [] }
 
         let urls = (try? FileManager.default.contentsOfDirectory(
@@ -108,11 +143,15 @@ struct EditorJumpBarView: View {
         return lhs.lastPathComponent.localizedCaseInsensitiveCompare(rhs.lastPathComponent) == .orderedAscending
     }
 
-    private func handleActivate(_ url: URL) {
-        if url.hasDirectoryPath {
-            revealInFinder(url)
-        } else {
-            appViewModel.openFile(at: url, line: 1, column: 1)
+    private func handleActivate(_ entry: Any) {
+        if let url = entry as? URL {
+            if url.hasDirectoryPath {
+                revealInFinder(url)
+            } else {
+                appViewModel.openFile(at: url, line: 1, column: 1)
+            }
+        } else if let symbol = entry as? DocumentSymbol {
+            document.editorState.cursorPositions = [CursorPosition(line: symbol.range.start.line + 1, column: symbol.range.start.character + 1)]
         }
     }
 
@@ -141,9 +180,11 @@ struct EditorJumpBarView: View {
 }
 
 private struct JumpBarSegmentView: View {
+    @Environment(AppViewModel.self) private var appViewModel
+    let document: EditorDocument
     let segment: JumpBarSegment
-    let menuEntries: [URL]
-    let onActivate: (URL) -> Void
+    let menuEntries: [Any]
+    let onActivate: (Any) -> Void
     let onReveal: (URL) -> Void
     let onCopyRelativePath: (URL) -> Void
     let onCopyFullPath: (URL) -> Void
@@ -156,10 +197,14 @@ private struct JumpBarSegmentView: View {
             if let url = segment.url {
                 Menu {
                     if !menuEntries.isEmpty {
-                        Section(segment.kind == .file ? "Open Nearby" : "Browse") {
-                            ForEach(menuEntries, id: \.self) { entry in
-                                Button(action: { onActivate(entry) }) {
-                                    Label(entry.lastPathComponent, systemImage: iconName(for: entry))
+                        Section(segment.kind.isSymbol ? "Symbols" : (segment.kind == .file ? "Open Nearby" : "Browse")) {
+                            ForEach(Array(menuEntries.enumerated()), id: \.offset) { _, entry in
+                                if let urlEntry = entry as? URL {
+                                    Button(action: { onActivate(urlEntry) }) {
+                                        Label(urlEntry.lastPathComponent, systemImage: iconName(for: urlEntry))
+                                    }
+                                } else if let symbolEntry = entry as? DocumentSymbol {
+                                    SymbolMenuItem(symbol: symbolEntry, onActivate: onActivate)
                                 }
                             }
                         }
@@ -174,6 +219,7 @@ private struct JumpBarSegmentView: View {
                     label
                 }
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 .buttonStyle(.plain)
             } else {
                 label
@@ -196,17 +242,17 @@ private struct JumpBarSegmentView: View {
             Image(systemName: segment.iconName)
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(segment.iconColor)
+                .fixedSize()
 
             Text(segment.title)
                 .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(minWidth: 0)
                 .font(.system(size: 11, weight: segment.isCurrent ? .semibold : .medium))
                 .foregroundStyle(segment.isCurrent ? .primary : .secondary)
-
-            Image(systemName: "chevron.down")
-                .font(.system(size: 7, weight: .bold))
-                .foregroundStyle(.secondary.opacity(0.75))
         }
         .padding(.horizontal, 8)
+        .frame(minWidth: 0)
         .padding(.vertical, 3)
         .background {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -241,11 +287,38 @@ private struct JumpBarSegmentView: View {
     }
 }
 
+private struct SymbolMenuItem: View {
+    let symbol: DocumentSymbol
+    let onActivate: (Any) -> Void
+    
+    var body: some View {
+        Button(action: { onActivate(symbol) }) {
+            Label {
+                Text(symbol.name)
+            } icon: {
+                Image(systemName: symbol.iconName)
+            }
+        }
+        
+        if let children = symbol.children, !children.isEmpty {
+            ForEach(children) { child in
+                SymbolMenuItem(symbol: child, onActivate: onActivate)
+            }
+        }
+    }
+}
+
 private struct JumpBarSegment: Hashable, Identifiable {
-    enum Kind {
+    enum Kind: Hashable {
         case project
         case folder
         case file
+        case symbol(DocumentSymbol)
+        
+        var isSymbol: Bool {
+            if case .symbol = self { return true }
+            return false
+        }
     }
 
     let title: String
@@ -263,6 +336,8 @@ private struct JumpBarSegment: Hashable, Identifiable {
             return url
         case .folder, .file:
             return url?.deletingLastPathComponent()
+        case .symbol:
+            return nil
         }
     }
 
@@ -274,6 +349,8 @@ private struct JumpBarSegment: Hashable, Identifiable {
             return "folder.fill"
         case .file:
             return FileIcon.iconName(for: title)
+        case .symbol(let symbol):
+            return symbol.iconName
         }
     }
 
@@ -285,6 +362,8 @@ private struct JumpBarSegment: Hashable, Identifiable {
             return .blue
         case .file:
             return FileIcon.iconColor(for: title)
+        case .symbol(let symbol):
+            return symbol.iconColor
         }
     }
 }

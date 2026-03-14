@@ -19,6 +19,9 @@ public struct EditorConfiguration: Equatable {
     // MARK: - Peripherals
     public var showLineNumbers: Bool
     public var showMinimap: Bool
+    public var showCurrentLineHighlight: Bool
+    public var showIndentGuides: Bool
+    public var showGutterMarkers: Bool
 
     // MARK: - Appearance
     public var useThemeBackground: Bool
@@ -38,6 +41,9 @@ public struct EditorConfiguration: Equatable {
         useSystemCursor: Bool = true,
         showLineNumbers: Bool = true,
         showMinimap: Bool = false,
+        showCurrentLineHighlight: Bool = true,
+        showIndentGuides: Bool = true,
+        showGutterMarkers: Bool = true,
         useThemeBackground: Bool = true,
         theme: EditorTheme = .dark,
         contentInsets: NSEdgeInsets = NSEdgeInsets(top: 8, left: 0, bottom: 32, right: 0)
@@ -51,6 +57,9 @@ public struct EditorConfiguration: Equatable {
         self.useSystemCursor = useSystemCursor
         self.showLineNumbers = showLineNumbers
         self.showMinimap = showMinimap
+        self.showCurrentLineHighlight = showCurrentLineHighlight
+        self.showIndentGuides = showIndentGuides
+        self.showGutterMarkers = showGutterMarkers
         self.useThemeBackground = useThemeBackground
         self.theme = theme
         self.contentInsets = contentInsets
@@ -113,6 +122,9 @@ public struct EditorConfiguration: Equatable {
         lhs.useSystemCursor == rhs.useSystemCursor &&
         lhs.showLineNumbers == rhs.showLineNumbers &&
         lhs.showMinimap == rhs.showMinimap &&
+        lhs.showCurrentLineHighlight == rhs.showCurrentLineHighlight &&
+        lhs.showIndentGuides == rhs.showIndentGuides &&
+        lhs.showGutterMarkers == rhs.showGutterMarkers &&
         lhs.useThemeBackground == rhs.useThemeBackground &&
         lhs.theme == rhs.theme &&
         lhs.contentInsets.top == rhs.contentInsets.top &&

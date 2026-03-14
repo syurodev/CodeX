@@ -9,6 +9,9 @@ class LSPManager {
     private var processes: [String: Process] = [:]
     private var services: [String: LanguageClientService] = [:]
     
+    // Lưu lịch sử log 50 dòng cuối của mỗi server
+    var serverLogs: [String: [String]] = [:]
+    
     private init() {}
     
     /// Khởi chạy hoặc lấy Deno LSP cho dự án.
@@ -43,7 +46,15 @@ class LSPManager {
         errorPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if !data.isEmpty, let message = String(data: data, encoding: .utf8) {
-                print("🚨 Deno LSP Error: \(message.trimmingCharacters(in: .whitespacesAndNewlines))")
+                let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+                print("🚨 Deno LSP Error: \(text)")
+                
+                Task { @MainActor in
+                    var logs = LSPManager.shared.serverLogs[key] ?? []
+                    logs.append(text)
+                    if logs.count > 50 { logs.removeFirst(logs.count - 50) }
+                    LSPManager.shared.serverLogs[key] = logs
+                }
             }
         }
         

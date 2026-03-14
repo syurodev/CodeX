@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 // Actor quản lý pending requests - thread-safe không gây deadlock với Swift concurrency
 private actor RequestStore {
@@ -104,11 +105,9 @@ class LanguageClientService {
     
     func initialize(params: [String: Any]) async -> Any? {
         guard !isInitialized else { return nil }
-        print("📡 Sending 'initialize' request...")
         let response = await sendRequest(method: "initialize", params: params)
         sendNotification(method: "initialized", params: [:])
         isInitialized = true
-        print("✅ LSP Fully Initialized")
         return response
     }
     
@@ -139,6 +138,32 @@ class LanguageClientService {
             "params": params
         ]
         send(data: notification)
+    }
+
+    // MARK: - Document Symbols
+    
+    func fetchDocumentSymbols(fileURL: URL) async -> [DocumentSymbol]? {
+        let params: [String: Any] = [
+            "textDocument": [
+                "uri": fileURL.absoluteString
+            ]
+        ]
+        
+        let response = await sendRequest(method: "textDocument/documentSymbol", params: params)
+        
+        guard let arrayMap = response as? [[String: Any]] else {
+            return nil
+        }
+        
+        do {
+            let jsonData = try JSONSerialization.data(withJSONObject: arrayMap)
+            let decoder = JSONDecoder()
+            let symbols = try decoder.decode([DocumentSymbol].self, from: jsonData)
+            return symbols
+        } catch {
+            print("❌ Failed to decode DocumentSymbol: \(error)")
+            return nil
+        }
     }
     
     // MARK: - Low-level send
@@ -193,16 +218,14 @@ class LanguageClientService {
             if let method = json["method"] as? String {
                 // Server-initiated request (ví dụ: workspace/configuration)
                 let params = json["params"] as? [String: Any] ?? [:]
-                print("📩 Server requested: \(method) (id=\(id)) – sending reply")
                 sendServerRequestReply(id: id, method: method, params: params)
             } else {
                 // Đây là response cho request của client
-                print("📥 LSP response for id=\(id): \(json["result"] != nil ? "has result" : (json["error"] != nil ? "error" : "null"))")
                 await store.resolve(id: id, result: json["result"])
             }
-        } else if let method = json["method"] as? String {
+        } else if let _ = json["method"] as? String {
             // Notification (không có id)
-            print("📩 LSP notification: \(method)")
+            // print("📩 LSP notification: \(method)")
         }
     }
     

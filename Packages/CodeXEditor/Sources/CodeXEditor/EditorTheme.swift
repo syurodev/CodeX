@@ -39,6 +39,7 @@ public struct EditorTheme: Equatable {
     public var invisibles: NSColor
     public var gutterBackground: NSColor
     public var gutterForeground: NSColor
+    public var indentGuide: NSColor
 
     // MARK: - Syntax tokens
     public var keyword: TokenStyle
@@ -61,6 +62,7 @@ public struct EditorTheme: Equatable {
         invisibles: NSColor,
         gutterBackground: NSColor,
         gutterForeground: NSColor,
+        indentGuide: NSColor,
         keyword: TokenStyle,
         string: TokenStyle,
         number: TokenStyle,
@@ -80,6 +82,7 @@ public struct EditorTheme: Equatable {
         self.invisibles = invisibles
         self.gutterBackground = gutterBackground
         self.gutterForeground = gutterForeground
+        self.indentGuide = indentGuide
         self.keyword = keyword
         self.string = string
         self.number = number
@@ -148,6 +151,7 @@ public extension EditorTheme {
         invisibles:      NSColor(srgbRed: 0.424, green: 0.435, blue: 0.459, alpha: 1),
         gutterBackground:NSColor(srgbRed: 0.102, green: 0.110, blue: 0.145, alpha: 1),
         gutterForeground:NSColor(srgbRed: 0.424, green: 0.435, blue: 0.459, alpha: 1),
+        indentGuide:     NSColor(srgbRed: 0.859, green: 0.871, blue: 0.886, alpha: 0.12),
         keyword:   TokenStyle(color: NSColor(srgbRed: 0.988, green: 0.373, blue: 0.639, alpha: 1), bold: true),
         string:    TokenStyle(color: NSColor(srgbRed: 0.988, green: 0.408, blue: 0.365, alpha: 1)),
         number:    TokenStyle(color: NSColor(srgbRed: 0.820, green: 0.749, blue: 0.412, alpha: 1)),
@@ -170,6 +174,7 @@ public extension EditorTheme {
         invisibles:      NSColor(srgbRed: 0.843, green: 0.843, blue: 0.843, alpha: 1),
         gutterBackground:NSColor(srgbRed: 0.961, green: 0.961, blue: 0.961, alpha: 1),
         gutterForeground:NSColor(srgbRed: 0.5,   green: 0.5,   blue: 0.5,   alpha: 1),
+        indentGuide:     NSColor(srgbRed: 0.0,   green: 0.0,   blue: 0.0,   alpha: 0.09),
         keyword:   TokenStyle(color: NSColor(srgbRed: 0.608, green: 0.153, blue: 0.690, alpha: 1), bold: true),
         string:    TokenStyle(color: NSColor(srgbRed: 0.769, green: 0.102, blue: 0.086, alpha: 1)),
         number:    TokenStyle(color: NSColor(srgbRed: 0.110, green: 0.0,   blue: 0.812, alpha: 1)),
