@@ -1,6 +1,6 @@
 import SwiftUI
 import Testing
-import CodeXEditor
+
 import SwiftTerm
 @testable import CodeX
 

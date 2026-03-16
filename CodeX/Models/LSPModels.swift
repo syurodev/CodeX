@@ -1,6 +1,8 @@
 import Foundation
-import CodeXEditor
 
+
+// Temporarily disabled - will be reimplemented with new editor
+/*
 /// LSP completion item conforming to CodeXEditor's CompletionEntry.
 class LSPSuggestionEntry: CompletionEntry {
     var label: String
@@ -15,3 +17,4 @@ class LSPSuggestionEntry: CompletionEntry {
         self.insertText = insertText
     }
 }
+*/

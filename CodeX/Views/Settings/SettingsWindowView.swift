@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import CodeXEditor
+
 
 private enum SettingsSidebarItem: String, CaseIterable, Hashable, Identifiable {
     case themes
@@ -1318,6 +1318,7 @@ private struct FormatPreviewView: View {
         EditorConfiguration(
             font: NSFont(name: "SFMono-Regular", size: 12)
                 ?? .monospacedSystemFont(ofSize: 12, weight: .regular),
+            theme: settingsStore.settings.editorTheme.resolvedTheme(for: colorScheme),
             lineHeightMultiple: 1.4,
             letterSpacing: 1.0,
             tabWidth: config.tab_width,
@@ -1330,7 +1331,6 @@ private struct FormatPreviewView: View {
             showIndentGuides: true,
             showGutterMarkers: false,
             useThemeBackground: true,
-            theme: settingsStore.settings.editorTheme.resolvedTheme(for: colorScheme),
             contentInsets: NSEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
         )
     }
@@ -1347,6 +1347,8 @@ private struct FormatPreviewView: View {
                     .foregroundStyle(.secondary)
             }
 
+            // TODO: Re-enable editor preview after rebuilding editor
+            /*
             CodeXEditorView(
                 text: .constant(sampleCode),
                 language: .typescript,
@@ -1358,6 +1360,17 @@ private struct FormatPreviewView: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+            )
+            */
+
+            Text("Editor preview temporarily disabled")
+                .frame(height: 280)
+                .frame(maxWidth: .infinity)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
             )
 
             Text("Preview is illustrative — actual output may differ based on Prettier/Biome processing.")
@@ -1499,42 +1512,10 @@ private struct EditorThemePreview: View {
             .background(Color(nsColor: theme.gutterBackground))
 
             VStack(alignment: .leading, spacing: 8) {
-                EditorPreviewLine(
-                    number: 1,
-                    showNumber: settings.show_line_numbers,
-                    tokens: [
-                        ("struct ", Color(nsColor: theme.keyword.color)),
-                        ("ThemePanel", Color(nsColor: theme.type.color)),
-                        (" {", Color(nsColor: theme.text))
-                    ]
-                )
-                EditorPreviewLine(
-                    number: 2,
-                    showNumber: settings.show_line_numbers,
-                    tokens: [
-                        ("    let ", Color(nsColor: theme.keyword.color)),
-                        ("name", Color(nsColor: theme.variable.color)),
-                        (" = ", Color(nsColor: theme.operator_.color)),
-                        ("\"Xcode Dark\"", Color(nsColor: theme.string.color))
-                    ]
-                )
-                EditorPreviewLine(
-                    number: 3,
-                    showNumber: settings.show_line_numbers,
-                    tokens: [
-                        ("    var ", Color(nsColor: theme.keyword.color)),
-                        ("tabWidth", Color(nsColor: theme.variable.color)),
-                        (" = ", Color(nsColor: theme.operator_.color)),
-                        ("\(settings.tab_width)", Color(nsColor: theme.number.color))
-                    ]
-                )
-                EditorPreviewLine(
-                    number: 4,
-                    showNumber: settings.show_line_numbers,
-                    tokens: [
-                        ("}", Color(nsColor: theme.text))
-                    ]
-                )
+                // TODO: Re-enable syntax highlighting preview after rebuilding editor
+                Text("Preview temporarily disabled")
+                    .foregroundColor(Color(nsColor: theme.text))
+                    .padding()
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)

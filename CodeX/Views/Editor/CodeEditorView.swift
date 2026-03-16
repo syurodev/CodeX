@@ -1,5 +1,5 @@
 import SwiftUI
-import CodeXEditor
+
 
 struct CodeEditorView: View {
     @Environment(AppViewModel.self) private var appViewModel
@@ -61,6 +61,11 @@ struct SingleCodeEditorView: View {
         )
 
         GeometryReader { proxy in
+            // TODO: Re-enable editor after rebuilding
+            Text("Editor temporarily disabled")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(nsColor: .textBackgroundColor))
+            /*
             CodeXEditorView(
                 text: textBinding,
                 language: document.language,
@@ -71,10 +76,12 @@ struct SingleCodeEditorView: View {
                 ),
                 state: stateBinding,
                 completionDelegate: viewModel,
-                definitionDelegate: viewModel
+                definitionDelegate: viewModel,
+                inlineCompletionDelegate: viewModel
             )
             .ignoresSafeArea(.container, edges: .top)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            */
         }
     }
 }

@@ -1,5 +1,5 @@
 import SwiftUI
-import CodeEditLanguages
+// import CodeEditLanguages
 
 struct StatusBarView: View {
     @Environment(\.colorScheme) private var colorScheme

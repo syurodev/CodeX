@@ -1,5 +1,5 @@
 import SwiftUI
-import CodeXEditor
+
 
 /// Root settings scope for the first Xcode-style preferences milestone.
 /// Phase 0 intentionally keeps the domain narrow: themes, editing, and terminal.

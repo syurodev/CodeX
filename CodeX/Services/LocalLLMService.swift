@@ -170,9 +170,10 @@ final class LocalLLMService {
         temperature: Float = 0.7
     ) -> AsyncStream<String> {
         AsyncStream { continuation in
-            Task {
+            // Keep a reference so onTermination can cancel the inner task
+            let task = Task {
                 guard let container = self.modelContainer else {
-                    continuation.yield("[Lỗi] Model chưa được load.")
+                    continuation.yield("[Error] Model not loaded.")
                     continuation.finish()
                     return
                 }
@@ -180,17 +181,18 @@ final class LocalLLMService {
                 await MainActor.run { self.state = .generating }
 
                 do {
-                    let chat: [Chat.Message] = [
-                        .system(systemPrompt),
-                        .user(prompt),
-                    ]
-                    let userInput = UserInput(chat: chat)
+                    let messages: [Chat.Message] = systemPrompt.isEmpty
+                        ? [.user(prompt)]
+                        : [.system(systemPrompt), .user(prompt)]
+                    let userInput = UserInput(chat: messages)
                     let parameters = GenerateParameters(temperature: temperature)
                     let lmInput = try await container.prepare(input: userInput)
                     let stream = try await container.generate(input: lmInput, parameters: parameters)
 
                     var tokenCount = 0
                     for await generation in stream {
+                        // Respect cancellation inside the loop
+                        if Task.isCancelled { break }
                         switch generation {
                         case .chunk(let text):
                             continuation.yield(text)
@@ -201,11 +203,19 @@ final class LocalLLMService {
                         }
                     }
                 } catch {
-                    continuation.yield("[Lỗi sinh văn bản] \(error.localizedDescription)")
+                    if !Task.isCancelled {
+                        continuation.yield("[Error] \(error.localizedDescription)")
+                    }
                 }
 
                 await MainActor.run { self.state = .ready }
                 continuation.finish()
+            }
+
+            // When the consumer cancels or breaks out of the for-await loop,
+            // cancel the inner MLX task so it stops consuming CPU/GPU.
+            continuation.onTermination = { _ in
+                task.cancel()
             }
         }
     }

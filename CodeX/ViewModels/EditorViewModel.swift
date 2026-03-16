@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
-import CodeEditLanguages
-import CodeXEditor
+// import CodeEditLanguages
+
 import SwiftUI
 
 @MainActor
@@ -91,6 +91,7 @@ class EditorViewModel {
 
         let config = EditorConfiguration(
             font:                        editorSettings.resolved_font,
+            theme:                       appSettings.editorTheme.resolvedTheme(for: colorScheme),
             lineHeightMultiple:          editorSettings.line_height_multiple,
             letterSpacing:               editorSettings.letter_spacing,
             tabWidth:                    editorSettings.tab_width,
@@ -103,7 +104,6 @@ class EditorViewModel {
             showIndentGuides:            editorSettings.show_indent_guides,
             showGutterMarkers:           editorSettings.show_gutter_markers,
             useThemeBackground:          editorSettings.use_theme_background,
-            theme:                       appSettings.editorTheme.resolvedTheme(for: colorScheme),
             contentInsets:               NSEdgeInsets(top: top, left: 0, bottom: bottom, right: 0)
         )
         _cachedConfig = config
@@ -288,13 +288,51 @@ extension EditorViewModel: CompletionDelegate {
         ]
 
         let _ = await lsp.sendRequest(method: "textDocument/completion", params: params)
-        return [LSPSuggestionEntry(label: "exampleCompletion", detail: "LSP")]
+        return [LSPSuggestionEntry(text: "exampleCompletion", label: "exampleCompletion")]
     }
 
     func completionApplied(_ entry: any CompletionEntry, replacingRange range: NSRange) {
         if let entry = entry as? LSPSuggestionEntry {
             _ = entry.label
         }
+    }
+}
+
+// MARK: - InlineCompletionDelegate
+
+extension EditorViewModel: InlineCompletionDelegate {
+
+    func inlineCompletionRequested(prefix: String, suffix: String) async -> String? {
+        guard settingsStore.settings.aiCompletion.enabled else { return nil }
+        let llm = LocalLLMService.shared
+        guard case .ready = llm.state else { return nil }
+
+        // Qwen2.5-Coder supports Fill-in-the-Middle (FIM) with these special tokens
+        let fimPrompt = "<|fim_prefix|>\(prefix)<|fim_suffix|>\(suffix)<|fim_middle|>"
+
+        let stream = llm.generate(
+            prompt: fimPrompt,
+            systemPrompt: "",
+            maxTokens: 80,
+            temperature: 0.15
+        )
+
+        var result = ""
+        for await token in stream {
+            if Task.isCancelled { return nil }
+            // Stop at end-of-text token or double newline
+            if token.contains("<|endoftext|>") { break }
+            result += token
+            if result.contains("\n\n") { break }
+        }
+
+        if Task.isCancelled { return nil }
+        // Trim trailing whitespace/newlines; return nil if nothing useful
+        let trimmed = result
+            .replacingOccurrences(of: "<|endoftext|>", with: "")
+            .replacingOccurrences(of: "<|fim_middle|>", with: "")
+        let cleaned = trimmed.trimmingCharacters(in: .newlines)
+        return cleaned.isEmpty ? nil : cleaned
     }
 }
 
@@ -342,7 +380,7 @@ extension EditorViewModel: DefinitionDelegate {
                     if isImport,
                        let modulePath = extractModulePath(from: lines[targetLine]),
                        let resolved = resolveModulePath(modulePath, relativeTo: url) {
-                        return [DefinitionLink(url: resolved.standardizedFileURL, line: 1, column: 1, label: resolved.lastPathComponent)]
+                        return [DefinitionLink(url: resolved.standardizedFileURL, line: 1, column: 1)]
                     }
                 }
             }
@@ -455,9 +493,7 @@ extension EditorViewModel: DefinitionDelegate {
             return DefinitionLink(
                 url: isSameFile ? nil : uri,
                 line: line + 1,
-                column: character + 1,
-                label: uri.lastPathComponent,
-                sourcePreview: "Jump to definition in \(uri.lastPathComponent)"
+                column: character + 1
             )
         }
     }

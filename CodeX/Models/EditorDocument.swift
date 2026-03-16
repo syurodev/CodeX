@@ -1,7 +1,7 @@
 import Foundation
 import Observation
-import CodeEditLanguages
-import CodeXEditor
+// import CodeEditLanguages
+
 
 @Observable
 class EditorDocument: Identifiable {

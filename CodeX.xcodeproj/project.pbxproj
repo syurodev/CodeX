@@ -8,9 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		298697302F5C111100BA4739 /* PROJECT_STRUCTURE.md in Resources */ = {isa = PBXBuildFile; fileRef = 2986972F2F5C111100BA4739 /* PROJECT_STRUCTURE.md */; };
+		29B2BBE82F6820D7007E022F /* STTextView in Frameworks */ = {isa = PBXBuildFile; productRef = 29B2BBE72F6820D7007E022F /* STTextView */; };
 		5A0000014B00100000B0C001 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 5A0000034B00100000B0C003 /* SwiftTerm */; };
 		8A63C0014C00100000A0C001 /* ACPClient in Frameworks */ = {isa = PBXBuildFile; productRef = 8A63C0034C00100000A0C003 /* ACPClient */; };
-		BB0001014B00100000B0C001 /* CodeXEditor in Frameworks */ = {isa = PBXBuildFile; productRef = BB0003034B00100000B0C003 /* CodeXEditor */; };
 		CC1100014D00100000D0E001 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = CC1100034D00100000D0E002 /* MLX */; };
 		DD2200014E00200000E0F004 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = DD2200034E00200000E0F002 /* MLXLLM */; };
 		DD2200054E00200000E0F005 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = DD2200044E00200000E0F003 /* MLXLMCommon */; };
@@ -65,9 +65,9 @@
 			files = (
 				5A0000014B00100000B0C001 /* SwiftTerm in Frameworks */,
 				8A63C0014C00100000A0C001 /* ACPClient in Frameworks */,
-				BB0001014B00100000B0C001 /* CodeXEditor in Frameworks */,
 				CC1100014D00100000D0E001 /* MLX in Frameworks */,
 				DD2200014E00200000E0F004 /* MLXLLM in Frameworks */,
+				29B2BBE82F6820D7007E022F /* STTextView in Frameworks */,
 				DD2200054E00200000E0F005 /* MLXLMCommon in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -132,10 +132,10 @@
 			packageProductDependencies = (
 				5A0000034B00100000B0C003 /* SwiftTerm */,
 				8A63C0034C00100000A0C003 /* ACPClient */,
-				BB0003034B00100000B0C003 /* CodeXEditor */,
 				CC1100034D00100000D0E002 /* MLX */,
 				DD2200034E00200000E0F002 /* MLXLLM */,
 				DD2200044E00200000E0F003 /* MLXLMCommon */,
+				29B2BBE72F6820D7007E022F /* STTextView */,
 			);
 			productName = CodeX;
 			productReference = 297E56BB2F57FD63005336FB /* CodeX.app */;
@@ -222,9 +222,9 @@
 			packageReferences = (
 				5A0000024B00100000B0C002 /* XCLocalSwiftPackageReference "Packages/SwiftTerm" */,
 				8A63C0024C00100000A0C002 /* XCLocalSwiftPackageReference "Packages/ACPClient" */,
-				BB0002024B00100000B0C002 /* XCLocalSwiftPackageReference "Packages/CodeXEditor" */,
 				CC1100024D00100000D0E001 /* XCRemoteSwiftPackageReference "mlx-swift" */,
 				DD2200024E00200000E0F001 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
+				29B2BBE62F6820D7007E022F /* XCLocalSwiftPackageReference "../STTextView" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 297E56BC2F57FD63005336FB /* Products */;
@@ -597,6 +597,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		29B2BBE62F6820D7007E022F /* XCLocalSwiftPackageReference "../STTextView" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../STTextView;
+		};
 		5A0000024B00100000B0C002 /* XCLocalSwiftPackageReference "Packages/SwiftTerm" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/SwiftTerm;
@@ -604,10 +608,6 @@
 		8A63C0024C00100000A0C002 /* XCLocalSwiftPackageReference "Packages/ACPClient" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/ACPClient;
-		};
-		BB0002024B00100000B0C002 /* XCLocalSwiftPackageReference "Packages/CodeXEditor" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = Packages/CodeXEditor;
 		};
 /* End XCLocalSwiftPackageReference section */
 
@@ -631,6 +631,10 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		29B2BBE72F6820D7007E022F /* STTextView */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = STTextView;
+		};
 		5A0000034B00100000B0C003 /* SwiftTerm */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 5A0000024B00100000B0C002 /* XCLocalSwiftPackageReference "Packages/SwiftTerm" */;
@@ -639,11 +643,6 @@
 		8A63C0034C00100000A0C003 /* ACPClient */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = ACPClient;
-		};
-		BB0003034B00100000B0C003 /* CodeXEditor */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = BB0002024B00100000B0C002 /* XCLocalSwiftPackageReference "Packages/CodeXEditor" */;
-			productName = CodeXEditor;
 		};
 		CC1100034D00100000D0E002 /* MLX */ = {
 			isa = XCSwiftPackageProductDependency;

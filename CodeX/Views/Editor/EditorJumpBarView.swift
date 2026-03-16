@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import CodeXEditor
+
 
 struct EditorJumpBarView: View {
     static let height: CGFloat = 26
