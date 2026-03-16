@@ -26,7 +26,8 @@
       "Bash(xcodebuild -scheme CodeX -destination 'platform=macOS' build 2>&1 | grep -c \"error:\" ; xcodebuild -scheme CodeX -destination 'platform=macOS' build 2>&1 | grep \"BUILD\")",
       "Bash(xcodebuild -scheme CodeX -destination 'platform=macOS' build 2>&1 | grep -E \"error:|succeeded|FAILED\" | tail -5)",
       "Bash(xcodebuild -scheme CodeX -destination 'platform=macOS' build 2>&1 | grep \"BUILD\")",
-      "Bash(xcodebuild -scheme CodeX -destination 'platform=macOS' build 2>&1 | grep -E \"error:|BUILD\" | grep -v \"^$\")"
+      "Bash(xcodebuild -scheme CodeX -destination 'platform=macOS' build 2>&1 | grep -E \"error:|BUILD\" | grep -v \"^$\")",
+      "Bash(xcodebuild -scheme CodeX -destination 'platform=macOS' build)"
     ]
   }
 }

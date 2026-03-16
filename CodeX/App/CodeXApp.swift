@@ -15,6 +15,7 @@ struct CodeXApp: App {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                     appViewModel.shutdownAgentRuntimes()
+                    LocalLLMService.shared.unloadModel()
                 }
         }
         .defaultSize(width: 1200, height: 800)
@@ -83,6 +84,7 @@ struct CodeXApp: App {
 
         Settings {
             SettingsWindowView()
+                .environment(appViewModel)
                 .environment(appViewModel.settingsStore)
                 .containerBackground(.thinMaterial, for: .window)
         }

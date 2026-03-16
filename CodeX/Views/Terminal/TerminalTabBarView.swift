@@ -13,12 +13,25 @@ struct TerminalTabBarView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 GlassEffectContainer(spacing: 6.0) {
                     HStack(spacing: 2) {
+                        // ── Run output tab (always first) ─────────────────────
+                        if let runItem = viewModel.runOutputItem {
+                            RunOutputTabItemView(
+                                item: runItem,
+                                isSelected: viewModel.isRunTabActive,
+                                onSelect: { viewModel.selectRunTab() },
+                                onClose:  { viewModel.closeRunTab() }
+                            )
+                            .glassEffectID(runItem.id, in: tabNamespace)
+                            .glassEffectTransition(.matchedGeometry)
+                        }
+
+                        // ── Terminal sessions ──────────────────────────────────
                         ForEach(viewModel.sessions) { session in
                             TerminalTabItemView(
                                 session: session,
-                                isSelected: session.id == viewModel.activeSessionID,
+                                isSelected: !viewModel.isRunTabActive && session.id == viewModel.activeSessionID,
                                 onSelect: { viewModel.selectSession(id: session.id) },
-                                onClose: { viewModel.closeSession(id: session.id) }
+                                onClose:  { viewModel.closeSession(id: session.id) }
                             )
                             .glassEffectID(session.id, in: tabNamespace)
                             .glassEffectTransition(.matchedGeometry)
@@ -60,7 +73,63 @@ struct TerminalTabBarView: View {
     }
 }
 
-// MARK: - Tab Item
+// MARK: - Run output tab item
+
+private struct RunOutputTabItemView: View {
+    let item: RunOutputTabModel
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onClose: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 6) {
+                if item.isAlive {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 6, height: 6)
+                } else {
+                    Image(systemName: "stop.circle")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+
+                Text(item.title)
+                    .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .lineLimit(1)
+
+                if isSelected || isHovering {
+                    Button(action: onClose) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 12, height: 12)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .opacity(isHovering ? 1.0 : 0.6)
+                } else {
+                    Spacer().frame(width: 12)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Capsule())
+        .opacity(isSelected ? 1.0 : (isHovering ? 0.85 : 0.5))
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.1)) {
+                isHovering = hovering
+            }
+        }
+    }
+}
+
+// MARK: - Terminal session tab item
 
 private struct TerminalTabItemView: View {
     let session: TerminalSessionViewModel

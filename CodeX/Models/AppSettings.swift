@@ -9,6 +9,7 @@ struct AppSettings: Codable, Equatable {
     var terminal: TerminalSettings = TerminalSettings()
     var format: FormatSettings = FormatSettings()
     var tools: ToolsSettings = ToolsSettings()
+    var aiCompletion: AICompletionSettings = AICompletionSettings()
 
     // Custom decoder so that keys added after the initial release (e.g. "format",
     // "tools") don't crash with keyNotFound when reading older persisted data.
@@ -16,11 +17,12 @@ struct AppSettings: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        editor      = try c.decodeIfPresent(EditorSettings.self,        forKey: .editor)      ?? EditorSettings()
-        editorTheme = try c.decodeIfPresent(EditorThemePreference.self, forKey: .editorTheme) ?? .system
-        terminal    = try c.decodeIfPresent(TerminalSettings.self,      forKey: .terminal)    ?? TerminalSettings()
-        format      = try c.decodeIfPresent(FormatSettings.self,        forKey: .format)      ?? FormatSettings()
-        tools       = try c.decodeIfPresent(ToolsSettings.self,         forKey: .tools)       ?? ToolsSettings()
+        editor        = try c.decodeIfPresent(EditorSettings.self,        forKey: .editor)        ?? EditorSettings()
+        editorTheme   = try c.decodeIfPresent(EditorThemePreference.self, forKey: .editorTheme)   ?? .system
+        terminal      = try c.decodeIfPresent(TerminalSettings.self,      forKey: .terminal)      ?? TerminalSettings()
+        format        = try c.decodeIfPresent(FormatSettings.self,        forKey: .format)        ?? FormatSettings()
+        tools         = try c.decodeIfPresent(ToolsSettings.self,         forKey: .tools)         ?? ToolsSettings()
+        aiCompletion  = try c.decodeIfPresent(AICompletionSettings.self,  forKey: .aiCompletion)  ?? AICompletionSettings()
     }
 }
 
@@ -107,6 +109,20 @@ struct ToolsSettings: Codable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         prettier_path = try c.decodeIfPresent(String.self, forKey: .prettier_path) ?? ""
         biome_path    = try c.decodeIfPresent(String.self, forKey: .biome_path)    ?? ""
+    }
+}
+
+// MARK: - AICompletionSettings
+
+struct AICompletionSettings: Codable, Equatable {
+    /// Bật/tắt tính năng AI Completion
+    var enabled: Bool = false
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
     }
 }
 

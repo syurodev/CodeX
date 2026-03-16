@@ -10,7 +10,10 @@ import TextStory
 final class CodeXTextView: NSTextView {
 
     var configuration: EditorConfiguration = EditorConfiguration() {
-        didSet { applyConfiguration() }
+        didSet {
+            indentCacheVersion += 1   // font / tabWidth may have changed
+            applyConfiguration()
+        }
     }
 
     weak var editorDelegate: CodeXTextViewDelegate?
@@ -18,6 +21,41 @@ final class CodeXTextView: NSTextView {
     // MARK: - TextFormation
 
     private var textFilters: [Filter] = []
+
+    // MARK: - Indent guide cache
+
+    /// Bumped whenever text or config changes so drawBackground rebuilds lazily.
+    private var indentCacheVersion:    Int      = 0
+    private var cachedIndentVersion:   Int      = -1
+    private var cachedIndentMap:       [Int: Int] = [:]
+    private var cachedNextIndentMap:   [Int: Int] = [:]
+    /// Line-start offsets of whitespace-only lines (for O(1) lookup in drawBackground).
+    private var cachedIsWhitespaceSet: Set<Int>  = []
+    /// Sorted character offsets where each line starts — used for O(log n) line-number
+    /// lookup (GutterView) and for skipping off-screen fragments in drawBackground.
+    private var cachedLineStartOffsets: [Int] = []
+
+    // MARK: - Diagnostics
+    private var _bgSeq = 0
+
+    /// Cached result of `(" " as NSString).size(withAttributes:)` — recomputed only on font change.
+    private var cachedCharWidthFont:  NSFont? = nil
+    private var cachedCharWidthValue: CGFloat = 0
+    private var indentGuideCharWidth: CGFloat {
+        let font = configuration.font
+        if font !== cachedCharWidthFont {
+            cachedCharWidthFont  = font
+            cachedCharWidthValue = (" " as NSString).size(withAttributes: [.font: font]).width
+        }
+        return cachedCharWidthValue
+    }
+
+    // MARK: - Cmd+Hover state
+
+    private var isCmdHeld = false
+    private var hoverRange: NSRange? = nil
+    private var hoverAttributeBackups: [(range: NSRange, attrs: [NSAttributedString.Key: Any])] = []
+    private var hoverTrackingArea: NSTrackingArea?
 
     // MARK: - Init
 
@@ -157,6 +195,8 @@ final class CodeXTextView: NSTextView {
     // MARK: - Background drawing (current line highlight + indent guides)
 
     override func drawBackground(in rect: NSRect) {
+        _bgSeq += 1
+        let _seq = _bgSeq
         super.drawBackground(in: rect)
 
         let cfg = configuration
@@ -185,197 +225,131 @@ final class CodeXTextView: NSTextView {
 
         // Indentation guides — vertical segments and branching curves
         if cfg.showIndentGuides {
-            // Per-character advance including inter-character kern.
-            let charWidth   = (" " as NSString).size(withAttributes: [.font: cfg.font]).width
+            let charWidth   = indentGuideCharWidth          // cached — no recompute per frame
             let charAdvance = charWidth + cfg.kern
+            let tabPx       = charAdvance * CGFloat(cfg.tabWidth)
             let guideColor  = cfg.theme.indentGuide
             let content     = string as NSString
 
-            // Detect actual indent unit used in the file (GCD of all non-zero indentations)
-            // so guides align correctly even when cfg.tabWidth != file indentation.
-            let indentUnit = detectFileIndentUnit(in: content, tabWidth: cfg.tabWidth)
-            let guidePx    = charAdvance * CGFloat(indentUnit)
+            // Rebuild indent maps only when text or config changed (O(1) on scroll).
+            ensureIndentCache()
+            let indentMap    = cachedIndentMap
+            let nextIndentMap = cachedNextIndentMap
+            let wsSet        = cachedIsWhitespaceSet
+
+            // --- Batch paths: one for straight segments, one for curves/branches ---
+            let straightPath = NSBezierPath()
+            straightPath.lineWidth = 1.5
+            straightPath.setLineDash([3, 3], count: 2, phase: 0)
+
+            let branchPath = NSBezierPath()
+            branchPath.lineWidth = 1.5
+            branchPath.setLineDash([3, 3], count: 2, phase: 0)
+
+            let xInset: CGFloat = charAdvance * 0.7
+            let radius: CGFloat = 6.0
+            let kappa:  CGFloat = 0.552284749831
+
+            // Skip to the first fragment near the top of the dirty rect instead of
+            // iterating from the document start — eliminates O(scroll_position) per frame.
+            let visStartY    = max(0.0, rect.minY - configuration.lineHeight * 2)
+            let visStartChar = characterIndexForInsertion(at: CGPoint(x: 0, y: visStartY))
+            let enumStart: NSTextLocation = tcs.location(
+                tcs.documentRange.location, offsetBy: visStartChar
+            ) ?? tcs.documentRange.location
+
+            var _bgSkip = 0, _bgDrawn = 0
 
             tlm.enumerateTextLayoutFragments(
-                from: tcs.documentRange.location,
+                from: enumStart,
                 options: [.ensuresLayout, .ensuresExtraLineFragment]
             ) { fragment in
                 let fragMinY = fragment.layoutFragmentFrame.minY + origin.y
                 let fragMaxY = fragment.layoutFragmentFrame.maxY + origin.y
-                let fragH    = fragment.layoutFragmentFrame.height
 
-                // Cull fragments outside the dirty rect
                 guard fragMinY < rect.maxY + 50 else { return false }
-                guard fragMaxY > rect.minY - 50 else { return true }
+                guard fragMaxY > rect.minY - 50 else { _bgSkip += 1; return true }
 
                 guard let textRange = fragment.textElement?.elementRange else { return true }
                 let start = tcs.offset(from: tcs.documentRange.location, to: textRange.location)
                 let end   = tcs.offset(from: tcs.documentRange.location, to: textRange.endLocation)
                 guard start != NSNotFound, end != NSNotFound, start < content.length else { return true }
 
-                let len      = min(end - start, content.length - start)
-                guard len > 0 else { return true }
-                let lineText = content.substring(with: NSRange(location: start, length: len))
+                let leadingSpaces    = indentMap[start]     ?? 0
+                let nextIndentSpaces = nextIndentMap[start] ?? 0
+                let isWhitespaceOnly = wsSet.contains(start)   // O(1) set lookup
 
-                // 1. Calculate indent level. If empty/whitespace-only, use contextual indent.
-                let leadingSpaces: Int
-                let isWhitespaceOnly = lineText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                
-                if isWhitespaceOnly {
-                    leadingSpaces = findContextualIndent(at: start, in: content, tabWidth: cfg.tabWidth)
-                } else {
-                    var count = 0
-                    for ch in lineText {
-                        if ch == " "  { count += 1 }
-                        else if ch == "\t" { count += cfg.tabWidth }
-                        else { break }
-                    }
-                    leadingSpaces = count
-                }
-
-                let levels = leadingSpaces / indentUnit
+                let levels     = leadingSpaces    / cfg.tabWidth
+                let nextLevels = nextIndentSpaces / cfg.tabWidth
                 guard levels > 0 else { return true }
 
-                let glyphStartX = fragment.textLineFragments.first?.glyphOrigin.x ?? 0
-                let baseX = origin.x + glyphStartX
+                let lineFragment = fragment.textLineFragments.first
+                let glyphStartX  = lineFragment?.glyphOrigin.x ?? 0
+                let baseX        = origin.x + glyphStartX
+                let heightToUse  = lineFragment?.typographicBounds.height ?? fragment.layoutFragmentFrame.height
+                let midY         = fragMinY + heightToUse / 2.0
 
-                guideColor.setStroke()
-                guideColor.setFill()
-
-                let nextIndentSpaces = findNextIndent(after: end, in: content, tabWidth: cfg.tabWidth)
-                let nextLevels = nextIndentSpaces / indentUnit
-                
                 let loopEnd = max(levels, nextLevels)
                 for level in 0..<loopEnd {
-                    let x = baseX + CGFloat(level) * guidePx
+                    let x          = baseX + CGFloat(level) * tabPx + xInset
                     let continuesDown = nextLevels > level
-                    
+
                     if isWhitespaceOnly {
                         if continuesDown {
-                            let p = NSBezierPath()
-                            p.lineWidth = 1.5
-                            p.setLineDash([3, 3], count: 2, phase: 0)
-                            p.move(to: NSPoint(x: x, y: fragMinY))
-                            p.line(to: NSPoint(x: x, y: fragMaxY))
-                            p.stroke()
+                            straightPath.move(to: NSPoint(x: x, y: fragMinY))
+                            straightPath.line(to: NSPoint(x: x, y: fragMaxY))
                         }
                         continue
                     }
-                    
+
                     if level < levels - 1 {
-                        // Case A: Passthrough parent guide
+                        // Case A: passthrough vertical
                         if continuesDown {
-                            let p = NSBezierPath()
-                            p.lineWidth = 1.5
-                            p.setLineDash([3, 3], count: 2, phase: 0)
-                            p.move(to: NSPoint(x: x, y: fragMinY))
-                            p.line(to: NSPoint(x: x, y: fragMaxY))
-                            p.stroke()
+                            straightPath.move(to: NSPoint(x: x, y: fragMinY))
+                            straightPath.line(to: NSPoint(x: x, y: fragMaxY))
                         }
                     } else if level == levels - 1 {
-                        // Case B: The horizontal branch for the current text
-                        let path = NSBezierPath()
-                        path.lineWidth = 1.5
-                        path.setLineDash([3, 3], count: 2, phase: 0)
-                        
-                        let startY = fragMinY
-                        let heightToUse = fragment.textLineFragments.first?.typographicBounds.height ?? fragH
-                        let midY = fragMinY + heightToUse / 2.0
-                        
-                        let radius: CGFloat = 6.0
-                        let kappa: CGFloat = 0.552284749831 // Ideal for circles
-                        
-                        // endX = x + guidePx - 2: text bắt đầu tại x + guidePx (level tiếp theo)
-                        let endX = x + guidePx - 2.0
-                        
+                        // Case B: branch (├─ or └─)
+                        let endX = x + tabPx - 2.0 - xInset
                         if continuesDown {
-                            // ├─ shape (with curved branch)
-                            path.move(to: NSPoint(x: x, y: startY))
-                            path.line(to: NSPoint(x: x, y: fragMaxY))
-                            
-                            path.move(to: NSPoint(x: x, y: midY - radius))
-                            path.curve(to: NSPoint(x: x + radius, y: midY),
-                                       controlPoint1: NSPoint(x: x, y: midY - radius + radius * kappa),
-                                       controlPoint2: NSPoint(x: x + radius - radius * kappa, y: midY))
-                            path.line(to: NSPoint(x: endX, y: midY))
+                            straightPath.move(to: NSPoint(x: x, y: fragMinY))
+                            straightPath.line(to: NSPoint(x: x, y: fragMaxY))
+                            branchPath.move(to: NSPoint(x: x, y: midY - radius))
+                            branchPath.curve(to: NSPoint(x: x + radius, y: midY),
+                                             controlPoint1: NSPoint(x: x, y: midY - radius + radius * kappa),
+                                             controlPoint2: NSPoint(x: x + radius - radius * kappa, y: midY))
+                            branchPath.line(to: NSPoint(x: endX, y: midY))
                         } else {
-                            // └─ shape (with curved corner)
-                            path.move(to: NSPoint(x: x, y: startY))
-                            path.line(to: NSPoint(x: x, y: midY - radius))
-                            
-                            path.curve(to: NSPoint(x: x + radius, y: midY),
-                                       controlPoint1: NSPoint(x: x, y: midY - radius + radius * kappa),
-                                       controlPoint2: NSPoint(x: x + radius - radius * kappa, y: midY))
-                            path.line(to: NSPoint(x: endX, y: midY))
+                            straightPath.move(to: NSPoint(x: x, y: fragMinY))
+                            straightPath.line(to: NSPoint(x: x, y: midY - radius))
+                            branchPath.move(to: NSPoint(x: x, y: midY - radius))
+                            branchPath.curve(to: NSPoint(x: x + radius, y: midY),
+                                             controlPoint1: NSPoint(x: x, y: midY - radius + radius * kappa),
+                                             controlPoint2: NSPoint(x: x + radius - radius * kappa, y: midY))
+                            branchPath.line(to: NSPoint(x: endX, y: midY))
                         }
-                        path.stroke()
                     } else {
-                        // Case C: level >= levels — starter guide cho children
-                        // Bắt đầu từ midY (giữa dòng parent, nơi dấu mở ngoặc nằm)
-                        let path = NSBezierPath()
-                        path.lineWidth = 1.5
-                        path.setLineDash([3, 3], count: 2, phase: 0)
-                        let heightToUse = fragment.textLineFragments.first?.typographicBounds.height ?? fragH
-                        let midY = fragMinY + heightToUse / 2.0
-                        path.move(to: NSPoint(x: x, y: midY))
-                        path.line(to: NSPoint(x: x, y: fragMaxY))
-                        path.stroke()
+                        // Case C: child starter (from midY of opening line)
+                        straightPath.move(to: NSPoint(x: x, y: midY))
+                        straightPath.line(to: NSPoint(x: x, y: fragMaxY))
                     }
                 }
-
+                _bgDrawn += 1
                 return true
             }
+
+            if _seq % 30 == 0 {
+                print("[BG    #\(_seq)] rectMinY=\(Int(rect.minY))  visStartChar=\(visStartChar)  skipped=\(_bgSkip)  drawn=\(_bgDrawn)")
+            }
+
+            // Flush both paths in 2 draw calls
+            guideColor.setStroke()
+            straightPath.stroke()
+            branchPath.stroke()
         }
     }
 
-    /// Finds the indentation level of the NEXT non-empty line.
-    private func findNextIndent(after offset: Int, in content: NSString, tabWidth: Int) -> Int {
-        var searchIdx = offset
-        while searchIdx < content.length {
-            let lineRange = content.lineRange(for: NSRange(location: searchIdx, length: 0))
-            let text = content.substring(with: lineRange)
-            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return calculateLeadingSpaces(text, tabWidth: tabWidth)
-            }
-            searchIdx = lineRange.location + lineRange.length
-            if searchIdx >= content.length { break }
-        }
-        return 0
-    }
 
-    /// Finds a contextual indent level for a whitespace-only line by looking at
-    /// non-empty lines before and after it.
-    private func findContextualIndent(at offset: Int, in content: NSString, tabWidth: Int) -> Int {
-        var prevIndent = 0
-        var nextIndent = 0
-
-        // Scan backward
-        var searchIdx = offset
-        while searchIdx > 0 {
-            let lineRange = content.lineRange(for: NSRange(location: searchIdx - 1, length: 0))
-            let text = content.substring(with: lineRange)
-            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                prevIndent = calculateLeadingSpaces(text, tabWidth: tabWidth)
-                break
-            }
-            searchIdx = lineRange.location
-        }
-
-        // Scan forward
-        searchIdx = offset
-        while searchIdx < content.length {
-            let lineRange = content.lineRange(for: NSRange(location: searchIdx, length: 0))
-            let text = content.substring(with: lineRange)
-            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                nextIndent = calculateLeadingSpaces(text, tabWidth: tabWidth)
-                break
-            }
-            searchIdx = lineRange.location + lineRange.length
-            if searchIdx == content.length { break }
-        }
-
-        return max(prevIndent, nextIndent)
-    }
 
     private func calculateLeadingSpaces(_ text: String, tabWidth: Int) -> Int {
         var count = 0
@@ -387,37 +361,239 @@ final class CodeXTextView: NSTextView {
         return count
     }
 
-    /// Phát hiện indent unit thực tế của file bằng GCD của các mức indentation.
-    /// Tránh trường hợp cfg.tabWidth=4 nhưng file dùng 2-space indent.
-    private func detectFileIndentUnit(in content: NSString, tabWidth: Int) -> Int {
-        var result = 0
-        var searchIdx = 0
-        var linesChecked = 0
-        while searchIdx < content.length, linesChecked < 200 {
-            let lineRange = content.lineRange(for: NSRange(location: searchIdx, length: 0))
-            let text = content.substring(with: lineRange)
-            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                let spaces = calculateLeadingSpaces(text, tabWidth: tabWidth)
-                if spaces > 0 {
-                    result = result == 0 ? spaces : gcd(result, spaces)
-                }
-            }
-            searchIdx = lineRange.location + lineRange.length
-            linesChecked += 1
-            if searchIdx >= content.length { break }
+    /// Rebuilds indent maps once per text-or-config change; O(1) on subsequent calls
+    /// until the next change. Called at the top of the indent-guide drawing path.
+    private func ensureIndentCache() {
+        guard cachedIndentVersion != indentCacheVersion else { return }
+        cachedIndentVersion = indentCacheVersion
+
+        let content  = string as NSString
+        let tabWidth = configuration.tabWidth
+
+        var indentMap:     [Int: Int] = [:]
+        var nextIndentMap: [Int: Int] = [:]
+        var lineOffsets:   [Int]      = []
+        var whitespaceSet: Set<Int>   = []
+
+        var scanIdx = 0
+        while scanIdx < content.length {
+            let lr     = content.lineRange(for: NSRange(location: scanIdx, length: 0))
+            let text   = content.substring(with: lr)
+            let spaces = calculateLeadingSpaces(text, tabWidth: tabWidth)
+            let isEmpty = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            indentMap[lr.location] = isEmpty ? -1 : spaces
+            lineOffsets.append(lr.location)
+            if isEmpty { whitespaceSet.insert(lr.location) }
+            scanIdx = lr.location + lr.length
+            if scanIdx >= content.length { break }
         }
-        // Fallback về tabWidth nếu không detect được
-        return result == 0 ? tabWidth : max(1, result)
+
+        var lastNonEmpty = 0
+        for i in stride(from: lineOffsets.count - 1, through: 0, by: -1) {
+            let off = lineOffsets[i]
+            let v   = indentMap[off] ?? 0
+            if v >= 0 { lastNonEmpty = v }
+            nextIndentMap[off] = lastNonEmpty
+        }
+
+        var prevNonEmptySpaces = 0
+        for off in lineOffsets {
+            let v = indentMap[off] ?? 0
+            if v < 0 {
+                let next = nextIndentMap[off] ?? 0
+                indentMap[off] = max(prevNonEmptySpaces, next)
+            } else {
+                prevNonEmptySpaces = v
+            }
+        }
+
+        cachedIndentMap        = indentMap
+        cachedNextIndentMap    = nextIndentMap
+        cachedIsWhitespaceSet  = whitespaceSet
+        cachedLineStartOffsets = lineOffsets
     }
 
-    private func gcd(_ a: Int, _ b: Int) -> Int {
-        b == 0 ? a : gcd(b, a % b)
+    /// Called by CodeXEditorViewController.setText() for programmatic text replacement
+    /// (e.g. format-on-save). NSTextStorage.setAttributedString() bypasses the normal
+    /// user-input path so didChangeText() is never fired; we invalidate the cache here.
+    func invalidateIndentCache() {
+        indentCacheVersion += 1
     }
 
+    /// Returns the character offset and 1-based line number for the line that starts
+    /// just before `scrollY` (in the text view's document coordinate system).
+    ///
+    /// Safe to call from GutterView during drawing. Does NOT use
+    /// `characterIndexForInsertion` — that API can return incorrect results when
+    /// called from a sibling view before TextKit 2 has computed layout for the
+    /// new scroll position. Instead we use pure arithmetic on the cached line-start
+    /// offsets (rebuilt once per text/config change, O(1) afterwards).
+    ///
+    /// We back up 10 lines above the approximate visible top so the existing cull
+    /// guard in GutterView handles any rounding inaccuracy cheaply.
+    func visibleStartInfo(forScrollY scrollY: CGFloat) -> (charOffset: Int, lineNumber: Int) {
+        ensureIndentCache()
+        let offsets = cachedLineStartOffsets
+        guard !offsets.isEmpty else { return (0, 1) }
+        let originY = textContainerOrigin.y
+        let lineHt  = configuration.lineHeight
+        let approxIdx = max(0, Int((scrollY - originY) / lineHt) - 10)
+        let idx = min(approxIdx, offsets.count - 1)
+        return (offsets[idx], idx + 1)
+    }
+
+    /// Returns the 1-based line number containing `charOffset`.
+    /// Triggers cache rebuild if needed — O(n) first time after a change, O(log n) thereafter.
+    func lineNumber(at charOffset: Int) -> Int {
+        ensureIndentCache()
+        let offsets = cachedLineStartOffsets
+        guard offsets.count > 1 else { return 1 }
+        // Binary search: find the largest index i where offsets[i] <= charOffset.
+        var lo = 0, hi = offsets.count - 1
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2
+            if offsets[mid] <= charOffset { lo = mid } else { hi = mid - 1 }
+        }
+        return lo + 1   // 0-based array index → 1-based line number
+    }
+
+    // MARK: - Cmd+Click (Go to Definition)
+
+    override func mouseDown(with event: NSEvent) {
+        guard event.modifierFlags.contains(.command) else {
+            super.mouseDown(with: event)
+            return
+        }
+        clearHoverHighlight()
+        let point = convert(event.locationInWindow, from: nil)
+        let charIndex = characterIndexForInsertion(at: point)
+        setSelectedRange(NSRange(location: charIndex, length: 0))
+        editorDelegate?.textViewDidCommandClick(self, characterIndex: charIndex)
+    }
+
+    // MARK: - Cmd+Hover (cursor + underline preview)
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let old = hoverTrackingArea { removeTrackingArea(old) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        super.flagsChanged(with: event)
+        let cmdNow = event.modifierFlags.contains(.command)
+        guard cmdNow != isCmdHeld else { return }
+        isCmdHeld = cmdNow
+        window?.invalidateCursorRects(for: self)
+        if cmdNow {
+            updateCmdHover(at: convert(event.locationInWindow, from: nil))
+        } else {
+            clearHoverHighlight()
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        guard isCmdHeld else { return }
+        updateCmdHover(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        clearHoverHighlight()
+    }
+
+    /// Pointing-hand cursor over the entire text area while Cmd is held,
+    /// matching Xcode/VS Code convention.
+    override func resetCursorRects() {
+        if isCmdHeld {
+            discardCursorRects()
+            addCursorRect(visibleRect, cursor: .pointingHand)
+        } else {
+            super.resetCursorRects()
+        }
+    }
+
+    /// NSTextView resets the cursor via cursorUpdate(with:) every time the mouse
+    /// moves through a cursor rect. Override this so the pointing-hand persists
+    /// while Cmd is held — resetCursorRects alone is not enough.
+    override func cursorUpdate(with event: NSEvent) {
+        if isCmdHeld {
+            NSCursor.pointingHand.set()
+        } else {
+            super.cursorUpdate(with: event)
+        }
+    }
+
+    // MARK: Hover helpers
+
+    private func updateCmdHover(at point: NSPoint) {
+        let idx = characterIndexForInsertion(at: point)
+        guard let range = identifierRange(at: idx) else { clearHoverHighlight(); return }
+        if let current = hoverRange, current == range { return }
+        applyHoverHighlight(at: range)
+    }
+
+    private func applyHoverHighlight(at range: NSRange) {
+        guard let storage = textStorage else { return }
+        clearHoverHighlight()
+        // Back up existing attribute runs so we can restore exactly.
+        var backups: [(range: NSRange, attrs: [NSAttributedString.Key: Any])] = []
+        storage.enumerateAttributes(in: range, options: []) { attrs, sub, _ in
+            backups.append((range: sub, attrs: attrs))
+        }
+        hoverAttributeBackups = backups
+        hoverRange = range
+        storage.beginEditing()
+        storage.addAttribute(.foregroundColor, value: NSColor.linkColor, range: range)
+        storage.addAttribute(.underlineStyle,  value: NSUnderlineStyle.single.rawValue, range: range)
+        storage.addAttribute(.underlineColor,  value: NSColor.linkColor, range: range)
+        storage.endEditing()
+    }
+
+    private func clearHoverHighlight() {
+        defer { hoverRange = nil; hoverAttributeBackups = [] }
+        guard let range = hoverRange,
+              let storage = textStorage,
+              !hoverAttributeBackups.isEmpty else { return }
+        let len = storage.length
+        guard range.location + range.length <= len else { return }
+        storage.beginEditing()
+        for b in hoverAttributeBackups where b.range.location + b.range.length <= len {
+            storage.setAttributes(b.attrs, range: b.range)
+        }
+        storage.endEditing()
+    }
+
+    /// Returns the NSRange of the identifier (JS/TS token) that contains `index`,
+    /// or `nil` if the character at `index` is not part of an identifier.
+    private func identifierRange(at index: Int) -> NSRange? {
+        let text = string as NSString
+        guard index < text.length else { return nil }
+        func isId(_ c: unichar) -> Bool {
+            (c >= 65 && c <= 90)  ||  // A-Z
+            (c >= 97 && c <= 122) ||  // a-z
+            (c >= 48 && c <= 57)  ||  // 0-9
+            c == 95 || c == 36        // _ $
+        }
+        guard isId(text.character(at: index)) else { return nil }
+        var lo = index, hi = index
+        while lo > 0 && isId(text.character(at: lo - 1)) { lo -= 1 }
+        while hi + 1 < text.length && isId(text.character(at: hi + 1)) { hi += 1 }
+        return NSRange(location: lo, length: hi - lo + 1)
+    }
 
     // MARK: - Change notifications
 
     override func didChangeText() {
+        indentCacheVersion += 1   // text changed → rebuild indent maps on next draw
         super.didChangeText()
         editorDelegate?.textViewDidChangeText(self)
     }
@@ -446,4 +622,5 @@ extension CodeXTextView: TextInterface {}
 protocol CodeXTextViewDelegate: AnyObject {
     func textViewDidChangeText(_ textView: CodeXTextView)
     func textViewDidChangeSelection(_ textView: CodeXTextView)
+    func textViewDidCommandClick(_ textView: CodeXTextView, characterIndex: Int)
 }

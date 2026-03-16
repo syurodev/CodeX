@@ -7,6 +7,7 @@ private enum SettingsSidebarItem: String, CaseIterable, Hashable, Identifiable {
     case editor
     case terminal
     case format
+    case aiCompletion
 
     var id: Self { self }
 
@@ -16,6 +17,7 @@ private enum SettingsSidebarItem: String, CaseIterable, Hashable, Identifiable {
         case .editor: "Editor"
         case .terminal: "Terminal"
         case .format: "Format"
+        case .aiCompletion: "AI Completion"
         }
     }
 
@@ -25,6 +27,7 @@ private enum SettingsSidebarItem: String, CaseIterable, Hashable, Identifiable {
         case .editor: "text.alignleft"
         case .terminal: "terminal"
         case .format: "wand.and.sparkles"
+        case .aiCompletion: "sparkles"
         }
     }
 
@@ -34,6 +37,7 @@ private enum SettingsSidebarItem: String, CaseIterable, Hashable, Identifiable {
         case .editor: "Editing behavior and layout"
         case .terminal: "Appearance and launcher"
         case .format: "Prettier & format-on-save"
+        case .aiCompletion: "Local LLM code completion"
         }
     }
 }
@@ -59,6 +63,8 @@ struct SettingsWindowView: View {
                     TerminalSettingsView(onSettingMutation: keepSettingsWindowInFront)
                 case .format:
                     FormatSettingsView(onSettingMutation: keepSettingsWindowInFront)
+                case .aiCompletion:
+                    AICompletionSettingsView(onSettingMutation: keepSettingsWindowInFront)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -940,8 +946,14 @@ private struct TerminalSettingsView: View {
 }
 
 private struct FormatSettingsView: View {
-    @Environment(SettingsStore.self) private var settingsStore
+    @Environment(SettingsStore.self)  private var settingsStore
+    @Environment(AppViewModel.self)   private var appViewModel
     let onSettingMutation: () -> Void
+
+    /// Config loaded from the project's Prettier / Biome config file (nil when no file found).
+    @State private var projectConfigResult: ProjectConfigResult? = nil
+    /// Editable copy of the project config (kept in sync with the file).
+    @State private var projectStyle: DefaultFormatConfig = DefaultFormatConfig()
 
     var body: some View {
         ScrollView {
@@ -951,12 +963,37 @@ private struct FormatSettingsView: View {
                 defaultStyleCard
                 biomeCard
                 toolsCard
-                FormatPreviewView(config: settingsStore.settings.format.default_style)
+                FormatPreviewView(config: activeStyle)
             }
             .padding(28)
             .frame(maxWidth: 920, alignment: .leading)
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .task { loadProjectConfig() }
+        .onChange(of: appViewModel.project?.rootURL) { loadProjectConfig() }
+    }
+
+    // MARK: - Project config helpers
+
+    /// The config values currently shown in the Default Style card.
+    private var activeStyle: DefaultFormatConfig {
+        projectConfigResult != nil ? projectStyle : settingsStore.settings.format.default_style
+    }
+
+    private func loadProjectConfig() {
+        guard let root = appViewModel.project?.rootURL else {
+            projectConfigResult = nil
+            return
+        }
+        let result = ProjectConfigService.shared.readConfig(in: root)
+        projectConfigResult = result
+        if let result { projectStyle = result.config }
+    }
+
+    private func writeProjectConfig() {
+        guard let result = projectConfigResult else { return }
+        let updated = ProjectConfigResult(config: projectStyle, source: result.source)
+        try? ProjectConfigService.shared.writeConfig(projectStyle, to: updated)
     }
 
     // MARK: - Header
@@ -1007,32 +1044,60 @@ private struct FormatSettingsView: View {
     // MARK: - Default Style card
 
     private var defaultStyleCard: some View {
-        SettingsCard(
-            title: "Default Style",
-            description: "These options are used as fallback when your project has no Prettier or Biome config file. They are passed directly to the formatter — no config files are created in your project."
+        let isFromFile = projectConfigResult != nil
+        let isReadOnly = projectConfigResult.map { !$0.source.isWritable } ?? false
+        let cardDescription: String = {
+            if let result = projectConfigResult {
+                if result.source.isWritable {
+                    return "Loaded from **\(result.source.fileName)** in your project. Edits are saved directly to that file."
+                } else {
+                    return "Detected **\(result.source.fileName)** in your project (read-only format — edit the file directly to change these values)."
+                }
+            }
+            return "These options are used as fallback when your project has no Prettier or Biome config file. They are passed directly to the formatter — no config files are created in your project."
+        }()
+
+        return SettingsCard(
+            title: isFromFile ? "Project Config" : "Default Style",
+            description: cardDescription
         ) {
+            if isFromFile {
+                HStack(spacing: 8) {
+                    Image(systemName: isReadOnly ? "doc.text" : "doc.badge.gearshape")
+                        .foregroundStyle(isReadOnly ? Color.secondary : Color.accentColor)
+                    Text(isReadOnly
+                         ? "Read-only — changes here won't affect \(projectConfigResult!.source.fileName)"
+                         : "Editing updates \(projectConfigResult!.source.fileName) directly")
+                        .font(.subheadline)
+                        .foregroundStyle(isReadOnly ? Color.secondary : Color.accentColor)
+                }
+                .padding(.vertical, 4)
+                Divider()
+            }
             SettingsControlRow(title: "Tab width", description: "Number of spaces per indentation level.") {
                 Stepper(value: tabWidthBinding, in: 1...8) {
-                    Text("\(settingsStore.settings.format.default_style.tab_width) spaces")
+                    Text("\(activeStyle.tab_width) spaces")
                         .monospacedDigit()
                         .frame(width: 64, alignment: .trailing)
                 }
+                .disabled(isReadOnly)
             }
             Divider()
             SettingsControlRow(title: "Print width", description: "Wrap lines that exceed this column count.") {
                 Stepper(value: printWidthBinding, in: 40...200, step: 10) {
-                    Text("\(settingsStore.settings.format.default_style.print_width) cols")
+                    Text("\(activeStyle.print_width) cols")
                         .monospacedDigit()
                         .frame(width: 64, alignment: .trailing)
                 }
+                .disabled(isReadOnly)
             }
             Divider()
             SettingsControlRow(title: "Single quotes", description: "Use single quotes instead of double quotes for strings.") {
-                Toggle("Single quotes", isOn: singleQuoteBinding).labelsHidden()
+                Toggle("Single quotes", isOn: singleQuoteBinding).labelsHidden().disabled(isReadOnly)
             }
             Divider()
             SettingsControlRow(title: "Semicolons", description: "Add a semicolon at the end of every statement.") {
-                Toggle("Semicolons", isOn: semicolonsBinding).labelsHidden()
+                Toggle("Semicolons", isOn: semicolonsBinding).labelsHidden().disabled(isReadOnly)
             }
             Divider()
             SettingsControlRow(title: "Trailing commas", description: "Add trailing commas where valid in multi-line constructs.") {
@@ -1044,6 +1109,7 @@ private struct FormatSettingsView: View {
                 .pickerStyle(.segmented)
                 .frame(width: 180)
                 .labelsHidden()
+                .disabled(isReadOnly)
             }
         }
     }
@@ -1115,35 +1181,65 @@ private struct FormatSettingsView: View {
     }
 
     private var tabWidthBinding: Binding<Int> {
-        Binding(
+        if projectConfigResult != nil {
+            return Binding(
+                get: { projectStyle.tab_width },
+                set: { projectStyle.tab_width = $0; writeProjectConfig() }
+            )
+        }
+        return Binding(
             get: { settingsStore.settings.format.default_style.tab_width },
             set: { value in updateFormat { $0.default_style.tab_width = value } }
         )
     }
 
     private var printWidthBinding: Binding<Int> {
-        Binding(
+        if projectConfigResult != nil {
+            return Binding(
+                get: { projectStyle.print_width },
+                set: { projectStyle.print_width = $0; writeProjectConfig() }
+            )
+        }
+        return Binding(
             get: { settingsStore.settings.format.default_style.print_width },
             set: { value in updateFormat { $0.default_style.print_width = value } }
         )
     }
 
     private var singleQuoteBinding: Binding<Bool> {
-        Binding(
+        if projectConfigResult != nil {
+            return Binding(
+                get: { projectStyle.single_quote },
+                set: { projectStyle.single_quote = $0; writeProjectConfig() }
+            )
+        }
+        return Binding(
             get: { settingsStore.settings.format.default_style.single_quote },
             set: { value in updateFormat { $0.default_style.single_quote = value } }
         )
     }
 
     private var semicolonsBinding: Binding<Bool> {
-        Binding(
+        if projectConfigResult != nil {
+            return Binding(
+                get: { projectStyle.semicolons },
+                set: { projectStyle.semicolons = $0; writeProjectConfig() }
+            )
+        }
+        return Binding(
             get: { settingsStore.settings.format.default_style.semicolons },
             set: { value in updateFormat { $0.default_style.semicolons = value } }
         )
     }
 
     private var trailingCommaBinding: Binding<TrailingCommaStyle> {
-        Binding(
+        if projectConfigResult != nil {
+            return Binding(
+                get: { projectStyle.trailing_comma },
+                set: { projectStyle.trailing_comma = $0; writeProjectConfig() }
+            )
+        }
+        return Binding(
             get: { settingsStore.settings.format.default_style.trailing_comma },
             set: { value in updateFormat { $0.default_style.trailing_comma = value } }
         )
@@ -1711,5 +1807,223 @@ private struct TerminalThemePreview: View {
     private func terminalOutput(_ text: String, color: Color) -> some View {
         Text(text)
             .foregroundStyle(color)
+    }
+}
+
+
+// MARK: - AI Completion Settings View
+
+private struct AICompletionSettingsView: View {
+    @Environment(SettingsStore.self) private var settingsStore
+    let onSettingMutation: () -> Void
+
+    @State private var llm = LocalLLMService.shared
+    @State private var showDownloadConfirm = false
+    @State private var downloadError: String? = nil
+    @State private var isDownloading = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Header
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("AI Completion")
+                            .font(.largeTitle.weight(.semibold))
+                        Text("Run AI-powered code suggestions entirely on your device. No data is sent to the cloud.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 16)
+                }
+
+                // Enable toggle card
+                SettingsCard(
+                    title: "AI Code Completion",
+                    description: "Enable inline code suggestions powered by a local AI model. The model loads into memory on launch and is released when the app closes."
+                ) {
+                    SettingsControlRow(
+                        title: "Enable AI Completion",
+                        description: "When enabled, the model is loaded automatically each time the app starts."
+                    ) {
+                        Toggle("Enable AI Completion", isOn: enabledBinding)
+                            .labelsHidden()
+                    }
+                }
+
+                // Model status card
+                SettingsCard(
+                    title: "Local Model",
+                    description: "A compact AI model optimized for code. Runs fully on Apple Silicon — no internet connection required after setup."
+                ) {
+                    modelStatusRow
+                }
+
+                // Error display
+                if let error = downloadError {
+                    SettingsCard(title: "Error") {
+                        HStack(spacing: 10) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.red)
+                            Text(error)
+                                .font(.subheadline)
+                                .foregroundStyle(.red)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+            .padding(28)
+            .frame(maxWidth: 920, alignment: .leading)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .confirmationDialog(
+            "Download AI Model?",
+            isPresented: $showDownloadConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Download (~1.6 GB)") {
+                startDownload()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The AI model will be downloaded and stored on your device (~1.6 GB). An internet connection is required for this one-time setup.")
+        }
+    }
+
+    // MARK: - Model Status Row
+
+    @ViewBuilder
+    private var modelStatusRow: some View {
+        switch llm.state {
+        case .downloading(let progress):
+            SettingsControlRow(
+                title: "Downloading model…",
+                description: "Please keep the app open until the download completes."
+            ) {
+                VStack(alignment: .trailing, spacing: 4) {
+                    ProgressView(value: progress)
+                        .frame(width: 200)
+                    Text("\(Int(progress * 100))%")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+        case .loading(let progress):
+            SettingsControlRow(
+                title: "Loading model into memory…",
+                description: "This may take a moment on first launch."
+            ) {
+                VStack(alignment: .trailing, spacing: 4) {
+                    ProgressView(value: progress)
+                        .frame(width: 200)
+                    Text("\(Int(progress * 100))%")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+        case .ready:
+            SettingsControlRow(
+                title: "Model ready",
+                description: "The model is loaded and ready to use."
+            ) {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Text("Active")
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(.green)
+                }
+            }
+
+        case .generating:
+            SettingsControlRow(
+                title: "Generating…",
+                description: "The model is processing a request."
+            ) {
+                ProgressView()
+                    .scaleEffect(0.8)
+            }
+
+        case .error(let msg):
+            SettingsControlRow(
+                title: "Error",
+                description: msg
+            ) {
+                Button("Retry") {
+                    Task { await llm.loadModel() }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+
+        case .idle:
+            if llm.isModelAvailable {
+                SettingsControlRow(
+                    title: "Model downloaded",
+                    description: "The model is available on this device. Enable AI Completion above to load it automatically on launch."
+                ) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                        Text("Available")
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } else {
+                SettingsControlRow(
+                    title: "Model not downloaded",
+                    description: "The AI model has not been downloaded yet. Click the button to get started."
+                ) {
+                    Button("Download Model") {
+                        showDownloadConfirm = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                }
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private var enabledBinding: Binding<Bool> {
+        Binding(
+            get: { settingsStore.settings.aiCompletion.enabled },
+            set: { value in
+                if value && !llm.isModelAvailable {
+                    showDownloadConfirm = true
+                    return
+                }
+                settingsStore.updateAICompletion { $0.enabled = value }
+                onSettingMutation()
+                if value {
+                    Task { await llm.loadModel() }
+                } else {
+                    llm.unloadModel()
+                }
+            }
+        )
+    }
+
+    private func startDownload() {
+        isDownloading = true
+        downloadError = nil
+        Task {
+            do {
+                try await llm.downloadModel()
+                settingsStore.updateAICompletion { $0.enabled = true }
+                onSettingMutation()
+                await llm.loadModel()
+            } catch {
+                downloadError = "Download failed: \(error.localizedDescription)"
+            }
+            isDownloading = false
+        }
     }
 }

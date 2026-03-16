@@ -53,6 +53,9 @@ public struct CodeXEditorView: NSViewControllerRepresentable {
         vc.onStateChange = { [weak coordinator] newState in
             coordinator?.handleStateChange(newState)
         }
+        vc.onDefinitionRequested = { [weak coordinator] range, cursor, text in
+            coordinator?.handleDefinitionRequest(range: range, cursor: cursor, text: text)
+        }
 
         return vc
     }
@@ -113,6 +116,17 @@ public struct CodeXEditorView: NSViewControllerRepresentable {
             guard !isApplyingExternalUpdate else { return }
             DispatchQueue.main.async { [weak self] in
                 self?.stateBinding.wrappedValue = newState
+            }
+        }
+
+        func handleDefinitionRequest(range: NSRange, cursor: CursorPosition, text: String) {
+            guard let delegate = definitionDelegate else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard let links = await delegate.queryDefinition(
+                    forRange: range, cursor: cursor, in: text, url: nil
+                ), let first = links.first else { return }
+                delegate.openLink(first)
             }
         }
     }

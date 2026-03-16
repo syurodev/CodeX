@@ -3,6 +3,8 @@ import SwiftUI
 struct TerminalPanelView: View {
     @Bindable var viewModel: TerminalPanelViewModel
     @Binding var height: CGFloat
+    /// Passed down so the run output tab can render live output.
+    var runViewModel: ProjectRunViewModel? = nil
     let onNewSession: () -> Void
     let onClose: () -> Void
 
@@ -56,12 +58,26 @@ struct TerminalPanelView: View {
     // MARK: - Terminal Content
 
     private var terminalContent: some View {
-        Group {
-            if let activeSession = viewModel.activeSession {
-                TerminalSessionView(session: activeSession)
-                    .id(activeSession.id)
+        // All session views are kept in the ZStack at all times so their shell
+        // processes are never killed when the user switches tabs.
+        // Inactive sessions are hidden at the AppKit level (nsView.isHidden)
+        // inside TerminalSessionView, which keeps the process running while
+        // preventing the hidden view from receiving keyboard input.
+        ZStack {
+            ForEach(viewModel.sessions) { session in
+                let active = !viewModel.isRunTabActive && viewModel.activeSessionID == session.id
+                TerminalSessionView(session: session, isActive: active)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
+            }
+
+            if let runVM = runViewModel, viewModel.runOutputItem != nil {
+                RunOutputView(runViewModel: runVM)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .opacity(viewModel.isRunTabActive ? 1 : 0)
+                    .allowsHitTesting(viewModel.isRunTabActive)
+            }
+
+            if viewModel.sessions.isEmpty && !viewModel.isRunTabActive {
                 emptyState
             }
         }

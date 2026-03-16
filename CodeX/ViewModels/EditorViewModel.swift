@@ -200,7 +200,6 @@ class EditorViewModel {
     }
 
     private func sendDidOpen(for url: URL) {
-        print("📝 Sending textDocument/didOpen for: \(url.lastPathComponent)")
         lspService?.sendNotification(method: "textDocument/didOpen", params: [
             "textDocument": [
                 "uri": url.absoluteString,
@@ -222,10 +221,18 @@ class EditorViewModel {
         let projectRoot = appViewModelProjectRoot()
         let formatConfig = settingsStore.settings.format.default_style
         Task {
-            if let result = await BiomeService.shared.lint(fileURL: url, projectRoot: projectRoot, formatConfig: formatConfig) {
-                print("Linter results: \(result)")
-            }
+            _ = await BiomeService.shared.lint(fileURL: url, projectRoot: projectRoot, formatConfig: formatConfig)
         }
+    }
+
+    /// Reload nội dung của một document đang mở từ đĩa và sync với LSP.
+    /// Dùng sau khi formatter (Prettier/Biome) đã ghi file ra đĩa.
+    func reloadDocument(from url: URL, using fileService: FileSystemService) {
+        guard let doc = openDocuments.first(where: { $0.url == url }),
+              let content = try? fileService.readFileContents(at: url) else { return }
+        doc.text = content
+        doc.isModified = false
+        syncTextWithLSP(url: url, text: content)
     }
 
     /// Saves the current document's in-memory text back to disk.
@@ -286,7 +293,7 @@ extension EditorViewModel: CompletionDelegate {
 
     func completionApplied(_ entry: any CompletionEntry, replacingRange range: NSRange) {
         if let entry = entry as? LSPSuggestionEntry {
-            print("Applying completion: \(entry.label)")
+            _ = entry.label
         }
     }
 }
@@ -345,7 +352,9 @@ extension EditorViewModel: DefinitionDelegate {
     }
 
     func openLink(_ link: DefinitionLink) {
-        guard let url = link.url else { return }
+        // url == nil nghĩa là definition nằm trong cùng file; fallback về currentDocument
+        let targetURL = link.url ?? currentDocument?.url
+        guard let url = targetURL else { return }
         NotificationCenter.default.post(
             name: NSNotification.Name("CodeX.OpenAndJump"),
             object: nil,

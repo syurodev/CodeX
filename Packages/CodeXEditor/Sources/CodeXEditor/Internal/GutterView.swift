@@ -57,6 +57,9 @@ final class GutterView: NSView {
     /// Built during draw(); used for hit-testing in mouse event handlers.
     private var lineHitData: [(line: Int, range: NSRange, rect: NSRect)] = []
 
+    // MARK: - Diagnostics
+    private var _drawSeq = 0
+
     // MARK: - Init
 
     init() {
@@ -81,7 +84,7 @@ final class GutterView: NSView {
             withAttributes: [.font: configuration.lineNumberFont]
         ).width
         let markerLane: CGFloat = configuration.showGutterMarkers ? GutterView.markerLaneWidth : 0
-        return markerLane + CGFloat(digits) * digitWidth + 24
+        return markerLane + CGFloat(digits) * digitWidth + 20
     }
 
     // MARK: - Tracking Area
@@ -102,6 +105,9 @@ final class GutterView: NSView {
     // MARK: - Drawing
 
     override func draw(_ dirtyRect: NSRect) {
+        _drawSeq += 1
+        let _seq = _drawSeq
+
         guard
             let textView,
             let tlm  = textView.textLayoutManager,
@@ -121,13 +127,25 @@ final class GutterView: NSView {
 
         let cursorLine = currentLineNumber(in: textView)
         let selectedLineRanges = selectedLineRanges(in: textView)
-        let origin     = textView.textContainerOrigin
-        var lineNumber = 1
+        let origin = textView.textContainerOrigin
 
+        // Jump to the fragment near the current scroll position instead of scanning
+        // from the document start — removes O(scroll_position) work each frame.
+        // visibleStartInfo uses pure arithmetic on the cached line-start offsets so it
+        // works correctly even before TextKit 2 has computed layout for the new position.
+        let scrollY = scrollView?.contentView.bounds.origin.y ?? 0
+        let (startChar, startLine) = textView.visibleStartInfo(forScrollY: scrollY)
+        let startLoc: NSTextLocation = tcs.location(
+            tcs.documentRange.location, offsetBy: startChar
+        ) ?? tcs.documentRange.location
+
+        var lineNumber   = startLine
         var visibleLines = Set<Int>()
 
+        var _skip = 0, _drawn = 0
+
         tlm.enumerateTextLayoutFragments(
-            from: tcs.documentRange.location,
+            from: startLoc,
             options: [.ensuresLayout, .ensuresExtraLineFragment]
         ) { [weak self] fragment in
             guard let self else { return false }
@@ -150,6 +168,7 @@ final class GutterView: NSView {
             // Cull fragments well outside the visible area
             guard gutterRow.minY < self.bounds.height + 100 else { return false }
             guard gutterRow.maxY > -20 else {
+                _skip += 1
                 lineNumber += 1
                 return true
             }
@@ -209,7 +228,7 @@ final class GutterView: NSView {
             }
             let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: lineNumberColor]
             let strSize = label.size(withAttributes: attrs)
-            let xDraw   = self.bounds.width - strSize.width - 12
+            let xDraw   = self.bounds.width - strSize.width - 8
             let yDraw = round(gutterRow.midY - strSize.height / 2)
             label.draw(at: CGPoint(x: xDraw, y: yDraw), withAttributes: attrs)
 
@@ -219,8 +238,13 @@ final class GutterView: NSView {
                 self.lineHitData.append((line: lineNumber, range: nsRange, rect: gutterRow))
             }
 
+            _drawn += 1
             lineNumber += 1
             return true
+        }
+
+        if _seq % 30 == 0 {
+            print("[Gutter #\(_seq)] scrollY=\(Int(scrollY))  startChar=\(startChar)  startLine=\(startLine)  skipped=\(_skip)  drawn=\(_drawn)")
         }
 
         pruneHighlightState(keeping: visibleLines)

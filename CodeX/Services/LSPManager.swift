@@ -47,8 +47,6 @@ class LSPManager {
             let data = handle.availableData
             if !data.isEmpty, let message = String(data: data, encoding: .utf8) {
                 let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
-                print("🚨 Deno LSP Error: \(text)")
-                
                 Task { @MainActor in
                     var logs = LSPManager.shared.serverLogs[key] ?? []
                     logs.append(text)
@@ -65,10 +63,8 @@ class LSPManager {
             let service = LanguageClientService(process: process)
             services[key] = service
             
-            print("🚀 Deno LSP started for: \(projectRoot.lastPathComponent)")
             return service
         } catch {
-            print("❌ Failed to start Deno LSP: \(error)")
             return nil
         }
     }
@@ -76,7 +72,6 @@ class LSPManager {
     func stopAllServers() {
         for (key, process) in processes {
             process.terminate()
-            print("🛑 Stopped LSP: \(key)")
         }
         processes.removeAll()
         services.removeAll()

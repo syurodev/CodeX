@@ -12,6 +12,9 @@ public final class CodeXEditorViewController: NSViewController {
     /// Called when the user toggles a marker by clicking the gutter lane.
     /// `marker` is `nil` when removed, non-nil when added.
     public var onMarkerToggled: ((Int, GutterMarkerKind?) -> Void)?
+    /// Called when the user Cmd+Clicks a token to trigger go-to-definition.
+    /// Parameters: (characterRange, cursorPosition, fullDocumentText)
+    public var onDefinitionRequested: ((NSRange, CursorPosition, String) -> Void)?
 
     // MARK: - Configuration
 
@@ -134,7 +137,7 @@ public final class CodeXEditorViewController: NSViewController {
         gutterView.frame = NSRect(x: 0, y: 0, width: gutterWidth, height: totalHeight)
         scrollView.frame = NSRect(x: gutterWidth, y: 0, width: editorWidth, height: totalHeight)
         minimapView.frame = NSRect(x: gutterWidth + editorWidth, y: 0, width: minimapWidth, height: totalHeight)
-        textView.textContainerInset = NSSize(width: 8, height: cfg.contentInsets.top)
+        textView.textContainerInset = NSSize(width: 4, height: cfg.contentInsets.top)
         minimapView.syncFromEditor()
     }
 
@@ -207,6 +210,10 @@ public final class CodeXEditorViewController: NSViewController {
         storage.beginEditing()
         storage.setAttributedString(NSAttributedString(string: text, attributes: attrs))
         storage.endEditing()
+
+        // setAttributedString() bypasses the user-input path so didChangeText() is never
+        // called — explicitly invalidate the indent-guide cache so drawBackground rebuilds.
+        textView.invalidateIndentCache()
 
         updateLineCount()
         gutterView.needsDisplay = true
@@ -294,11 +301,14 @@ public final class CodeXEditorViewController: NSViewController {
     }
 
     private func cursorPositionFromSelection() -> CursorPosition {
-        let location = textView.selectedRange().location
-        let text = textView.string as NSString
+        cursorPositionFromOffset(textView.selectedRange().location, in: textView.string)
+    }
+
+    private func cursorPositionFromOffset(_ offset: Int, in text: String) -> CursorPosition {
+        let ns = text as NSString
         var line = 1, col = 1
-        for i in 0..<min(location, text.length) {
-            if text.character(at: i) == UInt16(("\n" as Character).asciiValue!) {
+        for i in 0..<min(offset, ns.length) {
+            if ns.character(at: i) == UInt16(("\n" as Character).asciiValue!) {
                 line += 1; col = 1
             } else {
                 col += 1
@@ -328,5 +338,11 @@ extension CodeXEditorViewController: CodeXTextViewDelegate {
         bracketHighlighter.update(in: textView)
         // Redraw text view so current line highlight and indent guides update.
         textView.needsDisplay = true
+    }
+
+    func textViewDidCommandClick(_ textView: CodeXTextView, characterIndex: Int) {
+        let text = textView.string
+        let cursor = cursorPositionFromOffset(characterIndex, in: text)
+        onDefinitionRequested?(NSRange(location: characterIndex, length: 0), cursor, text)
     }
 }

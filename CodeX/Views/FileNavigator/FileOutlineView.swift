@@ -7,6 +7,16 @@ struct FileOutlineView: NSViewControllerRepresentable {
     @Binding var selectedNode: FileNode?
     var onFileDoubleClicked: (FileNode) -> Void
     var onNodeExpanded: (FileNode) -> Void
+
+    // MARK: Context menu callbacks
+    var onNewFile: (URL) -> Void
+    var onNewFolder: (URL) -> Void
+    var onRename: (FileNode) -> Void
+    var onTrash: (FileNode) -> Void
+    var onDuplicate: (FileNode) -> Void
+    var onRevealInFinder: (FileNode) -> Void
+    var onCopyPath: (FileNode) -> Void
+    var onCopyRelativePath: (FileNode) -> Void
     
     func makeNSViewController(context: Context) -> FileOutlineViewController {
         let vc = FileOutlineViewController()
@@ -47,23 +57,71 @@ struct FileOutlineView: NSViewControllerRepresentable {
         func fileOutlineViewController(_ vc: FileOutlineViewController, didExpand node: FileNode) {
             self.parent.onNodeExpanded(node)
         }
+
+        // MARK: Context menu delegate
+
+        func fileOutlineViewController(_ vc: FileOutlineViewController, didRequestNewFileIn directory: URL) {
+            DispatchQueue.main.async { self.parent.onNewFile(directory) }
+        }
+
+        func fileOutlineViewController(_ vc: FileOutlineViewController, didRequestNewFolderIn directory: URL) {
+            DispatchQueue.main.async { self.parent.onNewFolder(directory) }
+        }
+
+        func fileOutlineViewController(_ vc: FileOutlineViewController, didRequestRename node: FileNode) {
+            DispatchQueue.main.async { self.parent.onRename(node) }
+        }
+
+        func fileOutlineViewController(_ vc: FileOutlineViewController, didRequestTrash node: FileNode) {
+            DispatchQueue.main.async { self.parent.onTrash(node) }
+        }
+
+        func fileOutlineViewController(_ vc: FileOutlineViewController, didRequestDuplicate node: FileNode) {
+            DispatchQueue.main.async { self.parent.onDuplicate(node) }
+        }
+
+        func fileOutlineViewController(_ vc: FileOutlineViewController, didRequestRevealInFinder node: FileNode) {
+            DispatchQueue.main.async { self.parent.onRevealInFinder(node) }
+        }
+
+        func fileOutlineViewController(_ vc: FileOutlineViewController, didRequestCopyPath node: FileNode) {
+            DispatchQueue.main.async { self.parent.onCopyPath(node) }
+        }
+
+        func fileOutlineViewController(_ vc: FileOutlineViewController, didRequestCopyRelativePath node: FileNode) {
+            DispatchQueue.main.async { self.parent.onCopyRelativePath(node) }
+        }
     }
 }
 
 protocol FileOutlineViewControllerDelegate: AnyObject {
+    // MARK: Navigation
     func fileOutlineViewController(_ vc: FileOutlineViewController, didSelect node: FileNode?)
     func fileOutlineViewController(_ vc: FileOutlineViewController, didDoubleClick node: FileNode)
     func fileOutlineViewController(_ vc: FileOutlineViewController, didExpand node: FileNode)
+
+    // MARK: Context menu
+    func fileOutlineViewController(_ vc: FileOutlineViewController, didRequestNewFileIn directory: URL)
+    func fileOutlineViewController(_ vc: FileOutlineViewController, didRequestNewFolderIn directory: URL)
+    func fileOutlineViewController(_ vc: FileOutlineViewController, didRequestRename node: FileNode)
+    func fileOutlineViewController(_ vc: FileOutlineViewController, didRequestTrash node: FileNode)
+    func fileOutlineViewController(_ vc: FileOutlineViewController, didRequestDuplicate node: FileNode)
+    func fileOutlineViewController(_ vc: FileOutlineViewController, didRequestRevealInFinder node: FileNode)
+    func fileOutlineViewController(_ vc: FileOutlineViewController, didRequestCopyPath node: FileNode)
+    func fileOutlineViewController(_ vc: FileOutlineViewController, didRequestCopyRelativePath node: FileNode)
 }
 
 class FileOutlineViewController: NSViewController, NSOutlineViewDelegate, NSOutlineViewDataSource {
     weak var delegate: FileOutlineViewControllerDelegate?
-    
+
     private var outlineView: NSOutlineView!
     private var scrollView: NSScrollView!
     private var rootNodes: [FileNode] = []
     private var gitStatusesByURL: [URL: GitFileStatus] = [:]
     private var directoryStatusesByURL: [URL: GitFileStatus] = [:]
+
+    /// Node được right-click gần nhất — lưu trong `menuNeedsUpdate` để các @objc action dùng lại.
+    private var clickedNodeForMenu: FileNode?
     
     override func loadView() {
         scrollView = NSScrollView()
@@ -92,6 +150,8 @@ class FileOutlineViewController: NSViewController, NSOutlineViewDelegate, NSOutl
         
         outlineView.target = self
         outlineView.doubleAction = #selector(onDoubleClick(_:))
+
+        setupContextMenu()
     }
     
     func update(with nodes: [FileNode], gitStatusesByURL: [URL: GitFileStatus]) {
@@ -313,5 +373,97 @@ class FileOutlineViewController: NSViewController, NSOutlineViewDelegate, NSOutl
         if newStatus.priority > current.priority {
             statuses[directoryURL] = newStatus
         }
+    }
+}
+
+// MARK: - Context Menu
+
+extension FileOutlineViewController: NSMenuDelegate {
+
+    func setupContextMenu() {
+        let menu = NSMenu()
+        menu.delegate = self
+        outlineView.menu = menu
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+
+        let row = outlineView.clickedRow
+        guard row >= 0, let node = outlineView.item(atRow: row) as? FileNode else { return }
+        clickedNodeForMenu = node
+
+        // --- New File / New Folder ---
+        menu.addItem(makeMenuItem("New File", action: #selector(menuNewFile), image: "doc.badge.plus"))
+        menu.addItem(makeMenuItem("New Folder", action: #selector(menuNewFolder), image: "folder.badge.plus"))
+        menu.addItem(.separator())
+
+        // --- Rename ---
+        menu.addItem(makeMenuItem("Rename", action: #selector(menuRename), image: "pencil"))
+
+        // --- Duplicate (chỉ cho file) ---
+        if !node.isDirectory {
+            menu.addItem(makeMenuItem("Duplicate", action: #selector(menuDuplicate), image: "doc.on.doc"))
+        }
+
+        // --- Move to Trash ---
+        menu.addItem(makeMenuItem("Move to Trash", action: #selector(menuTrash), image: "trash"))
+        menu.addItem(.separator())
+
+        // --- Reveal / Copy ---
+        menu.addItem(makeMenuItem("Reveal in Finder", action: #selector(menuRevealInFinder), image: "folder"))
+        menu.addItem(makeMenuItem("Copy Path", action: #selector(menuCopyPath), image: "doc.on.clipboard"))
+        menu.addItem(makeMenuItem("Copy Relative Path", action: #selector(menuCopyRelativePath), image: "link"))
+    }
+
+    private func makeMenuItem(_ title: String, action: Selector, image: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.image = NSImage(systemSymbolName: image, accessibilityDescription: nil)
+        return item
+    }
+
+    // MARK: @objc Actions
+
+    @objc private func menuNewFile() {
+        guard let node = clickedNodeForMenu else { return }
+        let dir = node.isDirectory ? node.url : node.url.deletingLastPathComponent()
+        delegate?.fileOutlineViewController(self, didRequestNewFileIn: dir)
+    }
+
+    @objc private func menuNewFolder() {
+        guard let node = clickedNodeForMenu else { return }
+        let dir = node.isDirectory ? node.url : node.url.deletingLastPathComponent()
+        delegate?.fileOutlineViewController(self, didRequestNewFolderIn: dir)
+    }
+
+    @objc private func menuRename() {
+        guard let node = clickedNodeForMenu else { return }
+        delegate?.fileOutlineViewController(self, didRequestRename: node)
+    }
+
+    @objc private func menuDuplicate() {
+        guard let node = clickedNodeForMenu else { return }
+        delegate?.fileOutlineViewController(self, didRequestDuplicate: node)
+    }
+
+    @objc private func menuTrash() {
+        guard let node = clickedNodeForMenu else { return }
+        delegate?.fileOutlineViewController(self, didRequestTrash: node)
+    }
+
+    @objc private func menuRevealInFinder() {
+        guard let node = clickedNodeForMenu else { return }
+        delegate?.fileOutlineViewController(self, didRequestRevealInFinder: node)
+    }
+
+    @objc private func menuCopyPath() {
+        guard let node = clickedNodeForMenu else { return }
+        delegate?.fileOutlineViewController(self, didRequestCopyPath: node)
+    }
+
+    @objc private func menuCopyRelativePath() {
+        guard let node = clickedNodeForMenu else { return }
+        delegate?.fileOutlineViewController(self, didRequestCopyRelativePath: node)
     }
 }

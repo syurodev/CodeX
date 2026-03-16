@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import CodeXEditor
 import Foundation
 
@@ -10,6 +11,7 @@ class AppViewModel {
     var fileNavigatorViewModel = FileNavigatorViewModel()
     var editorViewModel: EditorViewModel
     var gitViewModel = GitViewModel()
+    var projectRunViewModel = ProjectRunViewModel()
     var agentPanelViewModel = AgentPanelViewModel()
     var terminalPanelViewModel = TerminalPanelViewModel()
     var isTerminalPanelPresented = false
@@ -29,6 +31,7 @@ class AppViewModel {
         let prettierPath = settingsStore.settings.tools.prettier_path
         self.codeFormatService = CodeFormatService(prettierPath: prettierPath.isEmpty ? nil : prettierPath)
         syncToolPaths()
+        setupRunCallbacks()
     }
 
     init(settingsStore: SettingsStore) {
@@ -37,6 +40,34 @@ class AppViewModel {
         let prettierPath = settingsStore.settings.tools.prettier_path
         self.codeFormatService = CodeFormatService(prettierPath: prettierPath.isEmpty ? nil : prettierPath)
         syncToolPaths()
+        setupRunCallbacks()
+    }
+
+    // MARK: - Run orchestration
+
+    /// Wire `ProjectRunViewModel` events → terminal panel updates.
+    private func setupRunCallbacks() {
+        projectRunViewModel.onRunEnded = { [weak self] in
+            self?.terminalPanelViewModel.updateRunTabAlive(false)
+        }
+    }
+
+    /// Open the run output tab, show the panel, then start the process.
+    func startRun() {
+        guard let script = projectRunViewModel.selectedScript else { return }
+        terminalPanelViewModel.openRunTab(title: script.name)
+        if !isTerminalPanelPresented {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isTerminalPanelPresented = true
+            }
+        }
+        projectRunViewModel.run()
+    }
+
+    /// Stop the running process and mark the tab as ended.
+    func stopRun() {
+        projectRunViewModel.stop()
+        terminalPanelViewModel.updateRunTabAlive(false)
     }
 
     /// Sync custom tool paths from ToolsSettings into the format services.
@@ -59,6 +90,13 @@ class AppViewModel {
         fileNavigatorViewModel.loadDirectory(at: url, using: fileSystemService)
         gitViewModel.load(url: url, using: gitService)
         refreshGitFileStatuses()
+        projectRunViewModel.detect(in: url)
+
+        // Load AI model when a project is opened (if enabled and available)
+        let ai = settingsStore.settings.aiCompletion
+        if ai.enabled && LocalLLMService.shared.isModelAvailable {
+            Task { await LocalLLMService.shared.loadModel() }
+        }
     }
 
     func toggleTerminalPanel() {
@@ -77,12 +115,8 @@ class AppViewModel {
     }
 
     func openFile(at url: URL, line: Int, column: Int) {
-        print("📁 AppViewModel.openFile(at: \(url.lastPathComponent), line: \(line), column: \(column))")
         editorViewModel.openDocument(from: url, projectRoot: project?.rootURL, using: fileSystemService)
-        // Cập nhật vị trí con trỏ để SourceEditor tự động nhảy tới
-        let position = CursorPosition(line: line, column: column)
-        print("📍 Setting cursor position to: \(line):\(column)")
-        editorViewModel.editorState.cursorPositions = [position]
+        editorViewModel.editorState.cursorPositions = [CursorPosition(line: line, column: column)]
     }
 
     func refreshFileTree() {
@@ -130,7 +164,6 @@ class AppViewModel {
     }
 
     func openFolderPanel() {
-        print("➡️ AppViewModel.openFolderPanel()") // Added log
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -138,12 +171,8 @@ class AppViewModel {
         panel.message = "Choose a project folder to open"
 
         panel.begin { [weak self] response in
-            guard response == .OK, let url = panel.url else {
-                print("⚠️ Folder panel cancelled or no URL selected.") // Added log
-                return
-            }
+            guard response == .OK, let url = panel.url else { return }
             DispatchQueue.main.async {
-                print("✅ Folder selected: \(url.lastPathComponent). Opening project...") // Added log
                 self?.openProject(at: url)
             }
         }
@@ -179,15 +208,43 @@ class AppViewModel {
         guard codeFormatService.isSupported(url: currentURL) else { return }
         let cursorPositions = editorViewModel.editorState.cursorPositions
         let formatConfig = settingsStore.settings.format.default_style
-        do {
-            let result = try codeFormatService.formatFile(at: currentURL, workingDirectory: project?.rootURL, formatConfig: formatConfig)
-            editorViewModel.openDocument(from: currentURL, projectRoot: project?.rootURL, using: fileSystemService)
+
+        // Step 1: Try Prettier (synchronous, --write trực tiếp ra đĩa)
+        let prettierResult = try? codeFormatService.formatFile(
+            at: currentURL,
+            workingDirectory: project?.rootURL,
+            formatConfig: formatConfig
+        )
+
+        if let result = prettierResult, result.changed {
+            // Prettier thành công — reload doc đang mở từ đĩa (không dùng openDocument vì nó skip file đã mở)
+            editorViewModel.reloadDocument(from: currentURL, using: fileSystemService)
             editorViewModel.editorState.cursorPositions = cursorPositions
-            if !result.stderr.isEmpty {
-                print("Prettier stderr: \(result.stderr)")
+            return
+        }
+
+        // Step 2: Prettier thất bại hoặc chưa cài — fallback sang Biome
+        if let stderr = prettierResult?.stderr, !stderr.isEmpty {
+            print("⚠️ Prettier failed, falling back to Biome: \(stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
+
+        let docText = editorViewModel.currentDocument?.text ?? ""
+        Task { @MainActor in
+            if let formatted = await BiomeService.shared.format(
+                text: docText,
+                fileName: currentURL.lastPathComponent,
+                projectRoot: self.project?.rootURL,
+                formatConfig: formatConfig
+            ) {
+                // Biome thành công — ghi ra đĩa rồi reload doc đang mở
+                try? self.fileSystemService.writeFile(text: formatted, to: currentURL)
+                self.editorViewModel.reloadDocument(from: currentURL, using: self.fileSystemService)
+                self.editorViewModel.editorState.cursorPositions = cursorPositions
+            } else {
+                // Cả Prettier lẫn Biome đều thất bại — plain save không format
+                print("⚠️ Biome format also failed — saving without format")
+                self.editorViewModel.saveCurrentDocument(using: self.fileSystemService)
             }
-        } catch {
-            print("Format error: \(error)")
         }
     }
 
@@ -214,7 +271,115 @@ class AppViewModel {
         MainActor.assumeIsolated {
             shutdownAgentRuntimes()
             terminalPanelViewModel.killAll()
+            projectRunViewModel.stop()
         }
+    }
+}
+
+// MARK: - File Navigator Context Menu Actions
+
+extension AppViewModel {
+
+    func fileNavigator_newFile(in directory: URL) {
+        do {
+            let url = try fileSystemService.createFile(named: "untitled", in: directory)
+            refreshFileTree()
+            editorViewModel.openDocument(from: url, projectRoot: project?.rootURL, using: fileSystemService)
+        } catch {
+            print("❌ New file failed: \(error)")
+        }
+    }
+
+    func fileNavigator_newFolder(in directory: URL) {
+        do {
+            try fileSystemService.createFolder(named: "untitled folder", in: directory)
+            refreshFileTree()
+        } catch {
+            print("❌ New folder failed: \(error)")
+        }
+    }
+
+    func fileNavigator_rename(_ node: FileNode) {
+        let alert = NSAlert()
+        alert.messageText = "Rename \"\(node.name)\""
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+
+        let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        textField.stringValue = node.name
+        alert.accessoryView = textField
+        alert.layout()
+        alert.window.initialFirstResponder = textField
+        // Pre-select stem only (exclude extension) for UX convenience
+        let stem = (node.name as NSString).deletingPathExtension
+        textField.currentEditor()?.selectedRange = NSRange(location: 0, length: stem.count)
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let newName = textField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !newName.isEmpty, newName != node.name else { return }
+
+        // Close the document if it's currently open in the editor
+        if let doc = editorViewModel.openDocuments.first(where: { $0.url == node.url }) {
+            editorViewModel.closeDocument(id: doc.id)
+        }
+        do {
+            try fileSystemService.renameItem(at: node.url, to: newName)
+            refreshFileTree()
+        } catch {
+            print("❌ Rename failed: \(error)")
+        }
+    }
+
+    func fileNavigator_trash(_ node: FileNode) {
+        // Close the document or any documents inside the trashed directory
+        if node.isDirectory {
+            let prefix = node.url.path
+            editorViewModel.openDocuments
+                .filter { $0.url.path.hasPrefix(prefix) }
+                .forEach { editorViewModel.closeDocument(id: $0.id) }
+        } else if let doc = editorViewModel.openDocuments.first(where: { $0.url == node.url }) {
+            editorViewModel.closeDocument(id: doc.id)
+        }
+        do {
+            try fileSystemService.trashItem(at: node.url)
+            refreshFileTree()
+        } catch {
+            print("❌ Trash failed: \(error)")
+        }
+    }
+
+    func fileNavigator_duplicate(_ node: FileNode) {
+        do {
+            try fileSystemService.duplicateFile(at: node.url)
+            refreshFileTree()
+        } catch {
+            print("❌ Duplicate failed: \(error)")
+        }
+    }
+
+    func fileNavigator_revealInFinder(_ node: FileNode) {
+        fileSystemService.revealInFinder(node.url)
+    }
+
+    func fileNavigator_copyPath(_ node: FileNode) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(node.url.path, forType: .string)
+    }
+
+    func fileNavigator_copyRelativePath(_ node: FileNode) {
+        guard let rootURL = project?.rootURL else {
+            fileNavigator_copyPath(node)
+            return
+        }
+        var relative = node.url.path
+        let rootPath = rootURL.path
+        if relative.hasPrefix(rootPath) {
+            relative = String(relative.dropFirst(rootPath.count))
+            if relative.hasPrefix("/") { relative = String(relative.dropFirst()) }
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(relative, forType: .string)
     }
 }
 

@@ -18,7 +18,15 @@ struct MainWindowView: View {
                         gitStatusesByURL: appVM.fileNavigatorViewModel.gitStatusesByURL,
                         onFileSelected: { node in
                             appVM.openFile(node)
-                        }
+                        },
+                        onNewFile: { url in appVM.fileNavigator_newFile(in: url) },
+                        onNewFolder: { url in appVM.fileNavigator_newFolder(in: url) },
+                        onRename: { node in appVM.fileNavigator_rename(node) },
+                        onTrash: { node in appVM.fileNavigator_trash(node) },
+                        onDuplicate: { node in appVM.fileNavigator_duplicate(node) },
+                        onRevealInFinder: { node in appVM.fileNavigator_revealInFinder(node) },
+                        onCopyPath: { node in appVM.fileNavigator_copyPath(node) },
+                        onCopyRelativePath: { node in appVM.fileNavigator_copyRelativePath(node) }
                     )
                 } else if appVM.selectedSidebarTab == .spray {
                     AgentSidebarView(viewModel: appVM.agentPanelViewModel)
@@ -68,6 +76,7 @@ struct MainWindowView: View {
                     TerminalPanelView(
                         viewModel: appVM.terminalPanelViewModel,
                         height: $appVM.terminalPanelHeight,
+                        runViewModel: appVM.projectRunViewModel,
                         onNewSession: {
                             appVM.terminalPanelViewModel.newSession(workingDirectory: appVM.project?.rootURL)
                         },

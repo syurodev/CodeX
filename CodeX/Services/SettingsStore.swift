@@ -45,6 +45,10 @@ final class SettingsStore {
         update { mutate(&$0.tools) }
     }
 
+    func updateAICompletion(_ mutate: (inout AICompletionSettings) -> Void) {
+        update { mutate(&$0.aiCompletion) }
+    }
+
     func setEditorTheme(_ preference: EditorThemePreference) {
         update { $0.editorTheme = preference }
     }

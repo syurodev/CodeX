@@ -9,7 +9,7 @@ struct MainWindowToolbarContent: ToolbarContent {
         }
 
         ToolbarItem(placement: .principal) {
-            ToolbarTitlebarContextView(appViewModel: appViewModel)
+            ToolbarRunView(appViewModel: appViewModel)
         }
 
         if !appViewModel.isAgentInspectorPresented {

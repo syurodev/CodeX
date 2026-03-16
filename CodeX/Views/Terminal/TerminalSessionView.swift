@@ -3,6 +3,9 @@ import SwiftTerm
 
 struct TerminalSessionView: NSViewRepresentable {
     let session: TerminalSessionViewModel
+    /// When `false` the underlying NSView is hidden so the process stays alive
+    /// but the view is invisible and cannot receive keyboard input.
+    var isActive: Bool = true
     @Environment(SettingsStore.self) private var settingsStore
     @Environment(\.colorScheme) private var colorScheme
 
@@ -22,6 +25,12 @@ struct TerminalSessionView: NSViewRepresentable {
 
     func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {
         applyRuntimeAppearance(to: nsView)
+        let wasHidden = nsView.isHidden
+        nsView.isHidden = !isActive
+        // Restore keyboard focus when this tab becomes active again
+        if wasHidden && isActive {
+            nsView.window?.makeFirstResponder(nsView)
+        }
     }
 
     private func applyRuntimeAppearance(to view: LocalProcessTerminalView) {
