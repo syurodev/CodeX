@@ -41,6 +41,25 @@ public struct CursorPosition: Equatable, Hashable {
     }
 }
 
+public enum DiagnosticSeverity {
+    case error
+    case warning
+    case info
+    case hint
+}
+
+public struct Diagnostic {
+    public var range: NSRange
+    public var severity: DiagnosticSeverity
+    public var message: String
+
+    public init(range: NSRange, severity: DiagnosticSeverity, message: String) {
+        self.range = range
+        self.severity = severity
+        self.message = message
+    }
+}
+
 public struct DefinitionLink {
     public var url: URL?
     public var line: Int
@@ -78,10 +97,13 @@ public protocol CompletionEntry {
 public class LSPSuggestionEntry: CompletionEntry {
     public var text: String
     public var label: String
+    /// LSP CompletionItemKind (1–25)
+    public var kind: Int?
 
-    public init(text: String, label: String = "") {
+    public init(text: String, label: String = "", kind: Int? = nil) {
         self.text = text
         self.label = label.isEmpty ? text : label
+        self.kind = kind
     }
 }
 
@@ -94,6 +116,15 @@ public struct EditorTheme: Equatable {
     public var gutterForeground: NSColor
     public var lineHighlight: NSColor
 
+    // Syntax colors
+    public var keyword: NSColor
+    public var type: NSColor
+    public var string: NSColor
+    public var number: NSColor
+    public var comment: NSColor
+    public var function: NSColor
+    public var variable: NSColor
+
     public static let light = EditorTheme(
         background: .white,
         text: .black,
@@ -101,7 +132,14 @@ public struct EditorTheme: Equatable {
         cursor: .black,
         gutterBackground: NSColor(white: 0.95, alpha: 1.0),
         gutterForeground: NSColor(white: 0.5, alpha: 1.0),
-        lineHighlight: NSColor(white: 0.95, alpha: 1.0)
+        lineHighlight: NSColor(white: 0.95, alpha: 1.0),
+        keyword: NSColor(red: 0.67, green: 0.21, blue: 0.56, alpha: 1.0),
+        type: NSColor(red: 0.11, green: 0.53, blue: 0.60, alpha: 1.0),
+        string: NSColor(red: 0.77, green: 0.13, blue: 0.09, alpha: 1.0),
+        number: NSColor(red: 0.11, green: 0.00, blue: 0.81, alpha: 1.0),
+        comment: NSColor(red: 0.42, green: 0.45, blue: 0.48, alpha: 1.0),
+        function: NSColor(red: 0.24, green: 0.33, blue: 0.71, alpha: 1.0),
+        variable: .black
     )
 
     public static let dark = EditorTheme(
@@ -111,10 +149,17 @@ public struct EditorTheme: Equatable {
         cursor: .white,
         gutterBackground: NSColor(white: 0.15, alpha: 1.0),
         gutterForeground: NSColor(white: 0.5, alpha: 1.0),
-        lineHighlight: NSColor(white: 0.15, alpha: 1.0)
+        lineHighlight: NSColor(white: 0.15, alpha: 1.0),
+        keyword: NSColor(red: 0.93, green: 0.42, blue: 0.81, alpha: 1.0),
+        type: NSColor(red: 0.51, green: 0.83, blue: 0.88, alpha: 1.0),
+        string: NSColor(red: 0.99, green: 0.41, blue: 0.37, alpha: 1.0),
+        number: NSColor(red: 0.83, green: 0.68, blue: 0.99, alpha: 1.0),
+        comment: NSColor(red: 0.45, green: 0.53, blue: 0.60, alpha: 1.0),
+        function: NSColor(red: 0.49, green: 0.71, blue: 0.99, alpha: 1.0),
+        variable: .white
     )
 
-    public init(background: NSColor, text: NSColor, selection: NSColor, cursor: NSColor, gutterBackground: NSColor, gutterForeground: NSColor, lineHighlight: NSColor) {
+    public init(background: NSColor, text: NSColor, selection: NSColor, cursor: NSColor, gutterBackground: NSColor, gutterForeground: NSColor, lineHighlight: NSColor, keyword: NSColor, type: NSColor, string: NSColor, number: NSColor, comment: NSColor, function: NSColor, variable: NSColor) {
         self.background = background
         self.text = text
         self.selection = selection
@@ -122,10 +167,17 @@ public struct EditorTheme: Equatable {
         self.gutterBackground = gutterBackground
         self.gutterForeground = gutterForeground
         self.lineHighlight = lineHighlight
+        self.keyword = keyword
+        self.type = type
+        self.string = string
+        self.number = number
+        self.comment = comment
+        self.function = function
+        self.variable = variable
     }
 }
 
-public struct EditorConfiguration {
+public struct EditorConfiguration: Equatable {
     public var font: NSFont
     public var theme: EditorTheme
     public var lineHeightMultiple: CGFloat

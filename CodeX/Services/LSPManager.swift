@@ -14,24 +14,48 @@ class LSPManager {
     
     private init() {}
     
-    /// Khởi chạy hoặc lấy Deno LSP cho dự án.
-    func startDenoLSP(projectRoot: URL) -> LanguageClientService? {
-        let key = "deno-\(projectRoot.path)"
-        
+    /// Khởi chạy hoặc lấy vtsls (hoặc typescript-language-server) cho dự án.
+    /// Chạy qua login shell để tự resolve PATH từ .zshrc/.zprofile của user
+    /// (hỗ trợ NVM, Homebrew, volta, etc.).
+    func startTypeScriptLSP(projectRoot: URL) -> LanguageClientService? {
+        let key = "tsls-\(projectRoot.path)"
+
         if let existingService = services[key] {
             return existingService
         }
-        
+
         let process = Process()
-        
-        // Tìm binary deno trong App Bundle
-        if let bundlePath = Bundle.main.path(forResource: "deno", ofType: nil) {
-            process.executableURL = URL(fileURLWithPath: bundlePath)
-        } else {
-            process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/deno")
-        }
-        
-        process.arguments = ["lsp"]
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+
+        // Augment PATH với các location phổ biến: Zed vtsls, Homebrew, npm global, NVM.
+        // Dùng login shell (-l) để user's .zprofile/.zshrc cũng được load.
+        let home = NSHomeDirectory()
+        let extraPaths = [
+            "\(home)/Library/Application Support/Zed/languages/vtsls/node_modules/.bin",
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "\(home)/.nvm/versions/node/current/bin",
+            "\(home)/.volta/bin",
+        ].joined(separator: ":")
+        let currentPath = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = "\(extraPaths):\(currentPath)"
+        process.environment = env
+
+        // Source NVM nếu có (.zshrc không được load trong non-interactive login shell).
+        // Sau đó exec LSP server: thử vtsls trước, fallback typescript-language-server.
+        process.arguments = ["-l", "-c", """
+            [ -s "$HOME/.nvm/nvm.sh" ] && source "$HOME/.nvm/nvm.sh" 2>/dev/null
+            [ -s "$HOME/.volta/load.sh" ] && source "$HOME/.volta/load.sh" 2>/dev/null
+            if command -v vtsls >/dev/null 2>&1; then
+                exec vtsls --stdio
+            elif command -v typescript-language-server >/dev/null 2>&1; then
+                exec typescript-language-server --stdio
+            else
+                echo "No TypeScript LSP found (vtsls or typescript-language-server)" >&2
+                exit 1
+            fi
+            """]
         process.currentDirectoryURL = projectRoot
         
         let inputPipe = Pipe()

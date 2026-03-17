@@ -5,11 +5,20 @@ import SwiftUI
 struct CodeXApp: App {
     @State private var appViewModel = AppViewModel()
 
+    var preferredColorScheme: ColorScheme? {
+        switch appViewModel.settingsStore.settings.editorTheme {
+        case .xcodeLight: .light
+        case .xcodeDark:  .dark
+        case .system:     nil
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             MainWindowView()
                 .environment(appViewModel)
                 .environment(appViewModel.settingsStore)
+                .preferredColorScheme(preferredColorScheme)
                 .onDisappear {
                     appViewModel.shutdownAgentRuntimes()
                 }

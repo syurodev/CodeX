@@ -61,27 +61,25 @@ struct SingleCodeEditorView: View {
         )
 
         GeometryReader { proxy in
-            // TODO: Re-enable editor after rebuilding
-            Text("Editor temporarily disabled")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(nsColor: .textBackgroundColor))
-            /*
-            CodeXEditorView(
+            CESourceEditorView(
                 text: textBinding,
+                editorState: stateBinding,
                 language: document.language,
                 configuration: viewModel.editorConfiguration(
                     for: colorScheme,
-                    topContentInset: proxy.safeAreaInsets.top + topContentInset + 2,
-                    bottomContentInset: proxy.safeAreaInsets.bottom + bottomContentInset
+                    topContentInset: topContentInset,
+                    bottomContentInset: bottomContentInset
                 ),
-                state: stateBinding,
+                onTextChange: { newText in
+                    viewModel.documentTextChanged(id: document.id, newText: newText)
+                },
+                onStateChange: { newState in
+                    document.editorState = newState
+                },
                 completionDelegate: viewModel,
-                definitionDelegate: viewModel,
-                inlineCompletionDelegate: viewModel
+                definitionDelegate: viewModel
             )
-            .ignoresSafeArea(.container, edges: .top)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            */
         }
     }
 }

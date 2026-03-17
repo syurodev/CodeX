@@ -15,6 +15,9 @@ class EditorDocument: Identifiable {
     // LSP Document Symbols
     var symbols: [DocumentSymbol] = []
     var isFetchingSymbols: Bool = false
+
+    // LSP Diagnostics
+    var diagnostics: [Diagnostic] = []
     
     enum LSPStatus: Equatable {
         case off, starting, ready, error
@@ -75,7 +78,7 @@ class EditorDocument: Identifiable {
         self.lspStatus = .starting
         
         Task {
-            if let service = LSPManager.shared.startDenoLSP(projectRoot: projectRoot) {
+            if let service = LSPManager.shared.startTypeScriptLSP(projectRoot: projectRoot) {
                 // Đợi một chút để LSP Server xử lý xong didOpen hoặc thay đổi
                 try? await Task.sleep(for: .milliseconds(800))
                 

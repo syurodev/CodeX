@@ -27,7 +27,16 @@
       "Bash(xcodebuild -scheme CodeX -destination 'platform=macOS' build 2>&1 | grep -E \"error:|succeeded|FAILED\" | tail -5)",
       "Bash(xcodebuild -scheme CodeX -destination 'platform=macOS' build 2>&1 | grep \"BUILD\")",
       "Bash(xcodebuild -scheme CodeX -destination 'platform=macOS' build 2>&1 | grep -E \"error:|BUILD\" | grep -v \"^$\")",
-      "Bash(xcodebuild -scheme CodeX -destination 'platform=macOS' build)"
+      "Bash(xcodebuild -scheme CodeX -destination 'platform=macOS' build)",
+      "WebFetch(domain:codeeditapp.github.io)",
+      "WebFetch(domain:microsoft.github.io)",
+      "WebFetch(domain:deno.land)",
+      "WebFetch(domain:deno.com)",
+      "WebFetch(domain:docs.deno.com)",
+      "Bash(gh issue:*)",
+      "Bash(gh api:*)",
+      "Bash(curl:*)",
+      "WebFetch(domain:zed.dev)"
     ]
   }
 }

@@ -234,43 +234,10 @@ class LanguageClientService {
         var result: Any = NSNull()
         
         if method == "workspace/configuration" {
+            // typescript-language-server sends workspace/configuration requests.
+            // Return null for each item — the server will use its defaults.
             let items = (params["items"] as? [[String: Any]]) ?? []
-            result = items.map { item -> Any in
-                let section = item["section"] as? String ?? ""
-                switch section {
-                case "deno":
-                    return [
-                        "enable": true,
-                        "lint": true,
-                        "unstable": true,
-                        "suggest": [
-                            "imports": ["autoDiscover": true]
-                        ]
-                    ] as [String: Any]
-                case "javascript":
-                    return [
-                        "suggest": [
-                            "autoImports": true,
-                            "enabled": true
-                        ],
-                        "preferences": [
-                            "importModuleSpecifier": "shortest"
-                        ]
-                    ] as [String: Any]
-                case "typescript":
-                    return [
-                        "suggest": [
-                            "autoImports": true,
-                            "enabled": true
-                        ],
-                        "preferences": [
-                            "importModuleSpecifier": "shortest"
-                        ]
-                    ] as [String: Any]
-                default:
-                    return NSNull()
-                }
-            }
+            result = items.map { _ in NSNull() }
         }
         
         let reply: [String: Any] = [

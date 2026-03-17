@@ -9,6 +9,8 @@
 /* Begin PBXBuildFile section */
 		298697302F5C111100BA4739 /* PROJECT_STRUCTURE.md in Resources */ = {isa = PBXBuildFile; fileRef = 2986972F2F5C111100BA4739 /* PROJECT_STRUCTURE.md */; };
 		29B2BBE82F6820D7007E022F /* STTextView in Frameworks */ = {isa = PBXBuildFile; productRef = 29B2BBE72F6820D7007E022F /* STTextView */; };
+		29B2C0AE2F683F89007E022F /* CodeEditSourceEditor in Frameworks */ = {isa = PBXBuildFile; productRef = 29B2C0AD2F683F89007E022F /* CodeEditSourceEditor */; };
+		29B2C0B12F684058007E022F /* CodeEditSourceEditor in Frameworks */ = {isa = PBXBuildFile; productRef = 29B2C0B02F684058007E022F /* CodeEditSourceEditor */; };
 		5A0000014B00100000B0C001 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 5A0000034B00100000B0C003 /* SwiftTerm */; };
 		8A63C0014C00100000A0C001 /* ACPClient in Frameworks */ = {isa = PBXBuildFile; productRef = 8A63C0034C00100000A0C003 /* ACPClient */; };
 		CC1100014D00100000D0E001 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = CC1100034D00100000D0E002 /* MLX */; };
@@ -63,10 +65,12 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				29B2C0AE2F683F89007E022F /* CodeEditSourceEditor in Frameworks */,
 				5A0000014B00100000B0C001 /* SwiftTerm in Frameworks */,
 				8A63C0014C00100000A0C001 /* ACPClient in Frameworks */,
 				CC1100014D00100000D0E001 /* MLX in Frameworks */,
 				DD2200014E00200000E0F004 /* MLXLLM in Frameworks */,
+				29B2C0B12F684058007E022F /* CodeEditSourceEditor in Frameworks */,
 				29B2BBE82F6820D7007E022F /* STTextView in Frameworks */,
 				DD2200054E00200000E0F005 /* MLXLMCommon in Frameworks */,
 			);
@@ -136,6 +140,8 @@
 				DD2200034E00200000E0F002 /* MLXLLM */,
 				DD2200044E00200000E0F003 /* MLXLMCommon */,
 				29B2BBE72F6820D7007E022F /* STTextView */,
+				29B2C0AD2F683F89007E022F /* CodeEditSourceEditor */,
+				29B2C0B02F684058007E022F /* CodeEditSourceEditor */,
 			);
 			productName = CodeX;
 			productReference = 297E56BB2F57FD63005336FB /* CodeX.app */;
@@ -224,7 +230,8 @@
 				8A63C0024C00100000A0C002 /* XCLocalSwiftPackageReference "Packages/ACPClient" */,
 				CC1100024D00100000D0E001 /* XCRemoteSwiftPackageReference "mlx-swift" */,
 				DD2200024E00200000E0F001 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
-				29B2BBE62F6820D7007E022F /* XCLocalSwiftPackageReference "../STTextView" */,
+				29B2BBE62F6820D7007E022F /* XCLocalSwiftPackageReference "Packages/STTextView" */,
+				29B2C0AF2F684058007E022F /* XCLocalSwiftPackageReference "Packages/CodeEditSourceEditor" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 297E56BC2F57FD63005336FB /* Products */;
@@ -597,9 +604,13 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		29B2BBE62F6820D7007E022F /* XCLocalSwiftPackageReference "../STTextView" */ = {
+		29B2BBE62F6820D7007E022F /* XCLocalSwiftPackageReference "Packages/STTextView" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = ../STTextView;
+			relativePath = Packages/STTextView;
+		};
+		29B2C0AF2F684058007E022F /* XCLocalSwiftPackageReference "Packages/CodeEditSourceEditor" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/CodeEditSourceEditor;
 		};
 		5A0000024B00100000B0C002 /* XCLocalSwiftPackageReference "Packages/SwiftTerm" */ = {
 			isa = XCLocalSwiftPackageReference;
@@ -633,7 +644,16 @@
 /* Begin XCSwiftPackageProductDependency section */
 		29B2BBE72F6820D7007E022F /* STTextView */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = 29B2BBE62F6820D7007E022F /* XCLocalSwiftPackageReference "Packages/STTextView" */;
 			productName = STTextView;
+		};
+		29B2C0AD2F683F89007E022F /* CodeEditSourceEditor */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CodeEditSourceEditor;
+		};
+		29B2C0B02F684058007E022F /* CodeEditSourceEditor */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CodeEditSourceEditor;
 		};
 		5A0000034B00100000B0C003 /* SwiftTerm */ = {
 			isa = XCSwiftPackageProductDependency;

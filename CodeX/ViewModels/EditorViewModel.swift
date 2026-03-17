@@ -1,6 +1,8 @@
 import AppKit
 import Foundation
 // import CodeEditLanguages
+import CodeEditSourceEditor
+import CodeEditTextView
 
 import SwiftUI
 
@@ -29,9 +31,14 @@ class EditorViewModel {
     func documentTextChanged(id: UUID, newText: String) {
         if let index = openDocuments.firstIndex(where: { $0.id == id }) {
             let doc = openDocuments[index]
-            syncTextWithLSP(url: doc.url, text: newText)
+            // NOTE: Do NOT call syncTextWithLSP here.
+            // This function is invoked via DispatchQueue.main.async (from the text change
+            // notification chain), so it may run *during* a completion await with a stale
+            // `newText` captured from an earlier keystroke. Sending that old text with a
+            // higher version number would corrupt the LSP document state and cause Deno to
+            // return null completions. LSP sync is done just-in-time inside each LSP query.
             triggerLint(url: doc.url)
-            
+
             // Re-fetch symbols on text change (debounced implicitly in some cases, or we can just call it)
             if let root = appViewModelProjectRoot() {
                 doc.fetchSymbolsIfSupported(projectRoot: root)
@@ -46,6 +53,11 @@ class EditorViewModel {
     }
 
     private var lspService: LanguageClientService?
+    /// Monotonically increasing version counter per document URI for LSP didChange notifications.
+    private var lspDocumentVersions: [URL: Int] = [:]
+    /// Cached completion items from the last LSP response, used by completionOnCursorMove for
+    /// client-side filtering so we don't re-query LSP on every keystroke.
+    private var cachedCompletionItems: [CodeSuggestionEntry] = []
 
     var editorState: EditorState {
         get { currentDocument?.editorState ?? EditorState() }
@@ -73,11 +85,11 @@ class EditorViewModel {
 
     func editorConfiguration(
         for colorScheme: ColorScheme,
-        topContentInset: CGFloat = 8,
+        topContentInset: CGFloat = 2,
         bottomContentInset: CGFloat = 0
     ) -> EditorConfiguration {
-        let top    = max(8, topContentInset)
-        let bottom = max(0, bottomContentInset)
+        let top    = topContentInset
+        let bottom = bottomContentInset
         let appSettings = settingsStore.settings
         let editorSettings = appSettings.editor
 
@@ -157,7 +169,7 @@ class EditorViewModel {
 
     private func startLSP(for url: URL, projectRoot: URL? = nil) {
         let root = projectRoot ?? url.deletingLastPathComponent()
-        guard let service = LSPManager.shared.startDenoLSP(projectRoot: root) else { return }
+        guard let service = LSPManager.shared.startTypeScriptLSP(projectRoot: root) else { return }
         self.lspService = service
 
         Task {
@@ -167,7 +179,13 @@ class EditorViewModel {
                     "rootUri": root.absoluteString,
                     "capabilities": [
                         "textDocument": [
-                            "completion": ["completionItem": ["snippetSupport": true]],
+                            "completion": [
+                                "completionItem": [
+                                    "snippetSupport": true,
+                                    "documentationFormat": ["markdown", "plaintext"]
+                                ],
+                                "contextSupport": true
+                            ],
                             "definition": ["dynamicRegistration": true],
                             "hover": ["contentFormat": ["markdown", "plaintext"]],
                             "documentSymbol": [
@@ -180,12 +198,11 @@ class EditorViewModel {
                         ]
                     ],
                     "initializationOptions": [
-                        "enable": true,
-                        "lint": true,
-                        "unstable": true,
-                        "suggest": ["imports": ["hosts": ["https://deno.land": true]]],
-                        "javascript": ["suggest": ["autoImports": true, "enabled": true], "preferences": ["importModuleSpecifier": "shortest"]],
-                        "typescript": ["suggest": ["autoImports": true, "enabled": true], "preferences": ["importModuleSpecifier": "shortest"]]
+                        "preferences": [
+                            "importModuleSpecifier": "shortest",
+                            "includeCompletionsForModuleExports": true,
+                            "includeCompletionsWithInsertText": true
+                        ]
                     ]
                 ]
                 let _ = await service.initialize(params: initParams)
@@ -200,19 +217,30 @@ class EditorViewModel {
     }
 
     private func sendDidOpen(for url: URL) {
+        let ext = url.pathExtension.lowercased()
+        let languageId: String
+        switch ext {
+        case "ts", "tsx": languageId = "typescript"
+        case "js", "mjs", "cjs": languageId = "javascript"
+        case "jsx": languageId = "javascriptreact"
+        default: languageId = "typescript"
+        }
+        let docText = openDocuments.first(where: { $0.url == url })?.text ?? ""
         lspService?.sendNotification(method: "textDocument/didOpen", params: [
             "textDocument": [
                 "uri": url.absoluteString,
-                "languageId": "typescript",
+                "languageId": languageId,
                 "version": 1,
-                "text": text
+                "text": docText
             ]
         ])
     }
 
     private func syncTextWithLSP(url: URL, text: String) {
+        let version = (lspDocumentVersions[url] ?? 1) + 1
+        lspDocumentVersions[url] = version
         lspService?.sendNotification(method: "textDocument/didChange", params: [
-            "textDocument": ["uri": url.absoluteString, "version": 2],
+            "textDocument": ["uri": url.absoluteString, "version": version],
             "contentChanges": [["text": text]]
         ])
     }
@@ -276,19 +304,56 @@ extension EditorViewModel: CompletionDelegate {
         [".", "(", "\"", "'", "/", "@", "<"]
     }
 
-    func completionSuggestionsRequested(
+    func completionSuggestionsRequested(at cursor: CursorPosition, in text: String) async -> [any CompletionEntry]? {
+        await fetchLSPCompletions(at: cursor, in: text, triggerCharacter: nil)
+    }
+
+    private func fetchLSPCompletions(
         at cursor: CursorPosition,
-        in text: String
+        in text: String,
+        triggerCharacter: String?
     ) async -> [any CompletionEntry]? {
         guard let lsp = lspService, let url = currentDocument?.url else { return nil }
 
+        // LSP CompletionTriggerKind: 1 = Invoked, 2 = TriggerCharacter
+        let context: [String: Any]
+        if let tc = triggerCharacter {
+            context = ["triggerKind": 2, "triggerCharacter": tc]
+        } else {
+            context = ["triggerKind": 1]
+        }
+
         let params: [String: Any] = [
             "textDocument": ["uri": url.absoluteString],
-            "position": ["line": cursor.line - 1, "character": cursor.column - 1]
+            "position": ["line": cursor.line - 1, "character": cursor.column - 1],
+            "context": context
         ]
 
-        let _ = await lsp.sendRequest(method: "textDocument/completion", params: params)
-        return [LSPSuggestionEntry(text: "exampleCompletion", label: "exampleCompletion")]
+        guard let response = await lsp.sendRequest(method: "textDocument/completion", params: params) else {
+            print("🔴 [LSP] No response from LSP")
+            return nil
+        }
+
+        // LSP spec allows two response formats:
+        //   CompletionList  → { "isIncomplete": bool, "items": [...] }
+        //   CompletionItem[] → [...]
+        let items: [[String: Any]]
+        if let list = response as? [String: Any], let listItems = list["items"] as? [[String: Any]] {
+            items = listItems
+        } else if let directArray = response as? [[String: Any]] {
+            items = directArray
+        } else {
+            print("🔴 [LSP] No completion items in response (type: \(type(of: response)))")
+            return nil
+        }
+
+        print("🟢 [LSP] Got \(items.count) completion items from LSP")
+        return items.compactMap { item in
+            guard let label = item["label"] as? String else { return nil }
+            let insertText = item["insertText"] as? String ?? label
+            let kind = item["kind"] as? Int
+            return LSPSuggestionEntry(text: insertText, label: label, kind: kind)
+        }
     }
 
     func completionApplied(_ entry: any CompletionEntry, replacingRange range: NSRange) {
@@ -336,6 +401,277 @@ extension EditorViewModel: InlineCompletionDelegate {
     }
 }
 
+// MARK: - CodeEditSourceEditor Delegates
+
+struct LSPCompletionAdapter: CodeSuggestionEntry {
+    let entry: any CompletionEntry
+
+    /// Display label shown in the completion window (LSP "label" field).
+    var label: String { (entry as? LSPSuggestionEntry)?.label ?? entry.text }
+    /// Text that gets inserted when the item is applied (LSP "insertText" field).
+    var insertText: String { entry.text }
+
+    var detail: String? { nil }
+    var documentation: String? { nil }
+    var pathComponents: [String]? { nil }
+    var targetPosition: CodeEditSourceEditor.CursorPosition? { nil }
+    var sourcePreview: String? { nil }
+    var deprecated: Bool { false }
+
+    var image: Image {
+        Image(systemName: Self.symbolName(for: (entry as? LSPSuggestionEntry)?.kind))
+    }
+    var imageColor: Color {
+        Self.symbolColor(for: (entry as? LSPSuggestionEntry)?.kind)
+    }
+
+    // MARK: - LSP CompletionItemKind → SF Symbol
+
+    private static func symbolName(for kind: Int?) -> String {
+        switch kind {
+        case 2:  return "m.square.fill"        // Method
+        case 3:  return "f.square.fill"        // Function
+        case 4:  return "hammer.fill"          // Constructor
+        case 5:  return "square.grid.2x2.fill" // Field
+        case 6:  return "v.square.fill"        // Variable
+        case 7:  return "c.square.fill"        // Class
+        case 8:  return "i.square.fill"        // Interface
+        case 9:  return "square.stack.3d.up.fill" // Module / Namespace
+        case 10: return "p.square.fill"        // Property
+        case 12: return "number"               // Value
+        case 13: return "e.square.fill"        // Enum
+        case 14: return "k.square.fill"        // Keyword
+        case 15: return "curly.braces"         // Snippet
+        case 17: return "doc.fill"             // File
+        case 19: return "folder.fill"          // Folder
+        case 20: return "e.square"             // EnumMember
+        case 21: return "number.square.fill"   // Constant
+        case 22: return "s.square.fill"        // Struct
+        case 25: return "t.square.fill"        // TypeParameter
+        default: return "square.fill"          // Text / unknown
+        }
+    }
+
+    private static func symbolColor(for kind: Int?) -> Color {
+        switch kind {
+        case 2, 3:  return .blue        // Method, Function
+        case 4:     return .orange      // Constructor
+        case 5, 10: return .purple      // Field, Property
+        case 6:     return .teal        // Variable
+        case 7:     return .orange      // Class
+        case 8:     return .cyan        // Interface
+        case 9:     return .yellow      // Module
+        case 13:    return .yellow      // Enum
+        case 14:    return .pink        // Keyword
+        case 15:    return .green       // Snippet
+        case 20:    return Color.yellow.opacity(0.7) // EnumMember
+        case 21:    return .mint        // Constant
+        case 22:    return .orange      // Struct
+        case 25:    return .cyan        // TypeParameter
+        default:    return Color(nsColor: .secondaryLabelColor)
+        }
+    }
+}
+
+extension EditorViewModel: CodeSuggestionDelegate {
+    func completionTriggerCharacters() -> Set<String> {
+        ["."] // Only trigger on dot
+    }
+
+    private func lineAndColumn(from range: NSRange, in text: String) -> (line: Int, column: Int) {
+        let nsString = text as NSString
+        var line = 1
+        var column = 1
+        var currentIndex = 0
+
+        while currentIndex < range.location && currentIndex < nsString.length {
+            let char = nsString.character(at: currentIndex)
+            if char == 0x0A {
+                line += 1
+                column = 1
+            } else {
+                column += 1
+            }
+            currentIndex += 1
+        }
+
+        return (line, column)
+    }
+
+    func completionSuggestionsRequested(
+        textView: TextViewController,
+        cursorPosition: CodeEditSourceEditor.CursorPosition
+    ) async -> (windowPosition: CodeEditSourceEditor.CursorPosition, items: [CodeSuggestionEntry])? {
+        guard let doc = currentDocument else { return nil }
+
+        print("🔵 [Completion] CursorPosition from CodeEdit: range=\(cursorPosition.range) start.line=\(cursorPosition.start.line) start.col=\(cursorPosition.start.column)")
+
+        // Use textView's actual cursor position and text
+        let actualRange = textView.textView.selectedRange()
+        let actualText = textView.text
+        print("🔵 [Completion] Actual selectedRange from textView: \(actualRange)")
+        print("🔵 [Completion] Text length - doc: \(doc.text.count) vs textView: \(actualText.count)")
+
+        let (line, column) = lineAndColumn(from: actualRange, in: actualText)
+
+        // Get text around cursor for debugging
+        let nsString = actualText as NSString
+        let start = max(0, actualRange.location - 20)
+        let length = min(40, nsString.length - start)
+        let context = nsString.substring(with: NSRange(location: start, length: length))
+        print("🔵 [Completion] Request at line:\(line) col:\(column) context: '\(context)'")
+
+        // Sync text to LSP before requesting completions, truncated at the cursor.
+        // Truncation prevents TypeScript from seeing the next line as a chain continuation:
+        //   "console.\nlog.info(...)" → parsed as "console.log.info(...)" → LSP returns null
+        // With truncation, TypeScript sees "console." at EOF → returns all console members.
+        // For regular identifiers ("console"), truncation is also safe: TypeScript sees
+        // "console" at EOF and returns all matching completions.
+        let cursorOffset = actualRange.location
+        let utf16 = actualText.utf16
+        let lspText: String
+        if cursorOffset <= utf16.count,
+           let strIdx = utf16.index(utf16.startIndex, offsetBy: cursorOffset).samePosition(in: actualText) {
+            lspText = String(actualText[..<strIdx])
+        } else {
+            lspText = actualText
+        }
+        syncTextWithLSP(url: doc.url, text: lspText)
+
+        // Detect if completion was triggered by a trigger character (e.g. '.')
+        // so we can send triggerKind=2 to Deno, which enables member completions.
+        let triggerChars = completionTriggerCharacters()
+        var triggerChar: String? = nil
+        if actualRange.location > 0 {
+            let prev = nsString.character(at: actualRange.location - 1)
+            if let scalar = Unicode.Scalar(prev) {
+                let str = String(scalar)
+                if triggerChars.contains(str) { triggerChar = str }
+            }
+        }
+
+        let cursor = CodeX.CursorPosition(line: line, column: column)
+        let entries = await fetchLSPCompletions(at: cursor, in: actualText, triggerCharacter: triggerChar)
+
+        if let entries = entries {
+            let adapted = entries.map { LSPCompletionAdapter(entry: $0) }
+            cachedCompletionItems = adapted
+            print("🟢 [Completion] Returning \(adapted.count) items")
+            return (cursorPosition, adapted)
+        }
+        cachedCompletionItems = []
+        print("🔴 [Completion] No items")
+        return nil
+    }
+
+    func completionOnCursorMove(
+        textView: TextViewController,
+        cursorPosition: CodeEditSourceEditor.CursorPosition
+    ) -> [CodeSuggestionEntry]? {
+        guard !cachedCompletionItems.isEmpty else { return nil }
+
+        let cursorLocation = textView.textView.selectedRange().location
+        let nsString = textView.text as NSString
+
+        // Walk backwards from cursor to find the start of the current word
+        // (letters, digits, underscore are word chars; anything else breaks the word)
+        var wordStart = cursorLocation
+        while wordStart > 0 {
+            let c = nsString.character(at: wordStart - 1)
+            guard (c >= 97 && c <= 122) || (c >= 65 && c <= 90) ||
+                  (c >= 48 && c <= 57)  || c == 95 else { break }
+            wordStart -= 1
+        }
+
+        let wordLength = cursorLocation - wordStart
+
+        // No word chars immediately before cursor (e.g. just typed '.') →
+        // return nil so SuggestionController closes and re-opens with a fresh LSP query.
+        guard wordLength > 0 else { return nil }
+
+        let prefix = nsString.substring(with: NSRange(location: wordStart, length: wordLength)).lowercased()
+        let filtered = cachedCompletionItems.filter { $0.label.lowercased().hasPrefix(prefix) }
+        return filtered.isEmpty ? nil : filtered
+    }
+
+    func completionWindowApplyCompletion(
+        item: CodeSuggestionEntry,
+        textView: TextViewController,
+        cursorPosition: CodeEditSourceEditor.CursorPosition?
+    ) {
+        guard let tv = textView.textView else { return }
+
+        // Use actual current cursor from the text view (more reliable than the snapshot).
+        let cursorLocation = NSMaxRange(tv.selectedRange())
+        let nsString = tv.string as NSString
+
+        // Walk back from cursor to find the start of the partial word the user was typing.
+        // Word chars: a-z, A-Z, 0-9, underscore.
+        var wordStart = cursorLocation
+        while wordStart > 0 {
+            let c = nsString.character(at: wordStart - 1)
+            guard (c >= 97 && c <= 122) || (c >= 65 && c <= 90) ||
+                  (c >= 48 && c <= 57)  || c == 95 else { break }
+            wordStart -= 1
+        }
+
+        // Replace [wordStart, cursor) with the completion's insert text.
+        let replaceRange = NSRange(location: wordStart, length: cursorLocation - wordStart)
+        var text = (item as? LSPCompletionAdapter)?.insertText ?? item.label
+
+        // Strip leading '.' that some LSP servers include in insertText for member completions.
+        if text.hasPrefix(".") { text = String(text.dropFirst()) }
+
+        print("🟡 [Apply] label='\(item.label)' insert='\(text)' cursor=\(cursorLocation) replace=\(replaceRange)")
+
+        tv.undoManager?.beginUndoGrouping()
+        tv.selectionManager.setSelectedRange(replaceRange)
+        tv.insertText(text)
+        tv.undoManager?.endUndoGrouping()
+    }
+}
+
+extension EditorViewModel: JumpToDefinitionDelegate {
+    func queryLinks(forRange range: NSRange, textView: TextViewController) async -> [JumpToDefinitionLink]? {
+        print("🔵 [Definition] Query links for range: \(range)")
+        guard let doc = currentDocument else {
+            print("🔴 [Definition] No current document")
+            return nil
+        }
+        print("🔵 [Definition] Document: \(doc.url.lastPathComponent)")
+
+        let cursor = CodeX.CursorPosition(line: range.location / 100, column: range.location % 100)
+        let links = await queryDefinition(forRange: range, cursor: cursor, in: doc.text, url: doc.url)
+
+        if let links = links {
+            print("🟢 [Definition] Got \(links.count) links")
+            return links.map { link in
+                JumpToDefinitionLink(
+                    url: link.url,
+                    targetRange: CodeEditSourceEditor.CursorPosition(line: link.line, column: link.column),
+                    typeName: link.url?.lastPathComponent ?? "Definition",
+                    sourcePreview: "",
+                    documentation: nil
+                )
+            }
+        } else {
+            print("🔴 [Definition] No links returned")
+            return nil
+        }
+    }
+
+    func openLink(link: JumpToDefinitionLink) {
+        print("🟢 [Definition] Opening link: \(link.url?.path ?? "nil")")
+        if let url = link.url {
+            Task { @MainActor in
+                if let fileService = try? FileSystemService() {
+                    openDocument(from: url, using: fileService)
+                }
+            }
+        }
+    }
+}
+
 // MARK: - DefinitionDelegate
 
 extension EditorViewModel: DefinitionDelegate {
@@ -346,6 +682,11 @@ extension EditorViewModel: DefinitionDelegate {
         url: URL?
     ) async -> [DefinitionLink]? {
         guard let lsp = lspService, let url = url ?? currentDocument?.url else { return nil }
+
+        // Sync latest text just-in-time (same reason as in completionSuggestionsRequested)
+        if let doc = currentDocument {
+            syncTextWithLSP(url: url, text: doc.text)
+        }
 
         let params: [String: Any] = [
             "textDocument": ["uri": url.absoluteString],
