@@ -119,6 +119,40 @@ class CESourceEditorViewController: NSViewController {
             name: Notification.Name("com.CodeEdit.TextView.TextDidChangeNotification"),
             object: textViewController.textView
         )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(cursorDidUpdate),
+            name: TextViewController.cursorPositionUpdatedNotification,
+            object: textViewController
+        )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(scrollDidUpdate),
+            name: TextViewController.scrollPositionDidUpdateNotification,
+            object: textViewController
+        )
+    }
+
+    @objc private func cursorDidUpdate(_ notification: Notification) {
+        let cePositions = textViewController.cursorPositions
+        let newPositions = cePositions.map { pos in
+            CodeX.CursorPosition(line: pos.start.line, column: pos.start.column)
+        }
+        
+        if editorState.cursorPositions != newPositions {
+            editorState.cursorPositions = newPositions
+            onStateChange?(editorState)
+        }
+    }
+
+    @objc private func scrollDidUpdate(_ notification: Notification) {
+        let newScrollPosition = textViewController.scrollView.contentView.bounds.origin
+        if editorState.scrollPosition != newScrollPosition {
+            editorState.scrollPosition = newScrollPosition
+            onStateChange?(editorState)
+        }
     }
 
     @objc private func textDidChange(_ notification: Notification) {
@@ -148,7 +182,23 @@ class CESourceEditorViewController: NSViewController {
     
     func updateEditorState(_ state: EditorState) {
         editorState = state
-        // TODO: Update cursor positions and scroll
+        
+        // Update cursors if they differ
+        let currentPositions = textViewController.cursorPositions.map {
+            CodeX.CursorPosition(line: $0.start.line, column: $0.start.column)
+        }
+        
+        if currentPositions != state.cursorPositions {
+            let newCEPositions = state.cursorPositions.map {
+                CodeEditSourceEditor.CursorPosition(line: $0.line, column: $0.column)
+            }
+            textViewController.setCursorPositions(newCEPositions)
+        }
+        
+        // Update scroll if it differs
+        if textViewController.scrollView.contentView.bounds.origin != state.scrollPosition {
+            textViewController.scrollView.contentView.scroll(state.scrollPosition)
+        }
     }
     
     // MARK: - Helpers
