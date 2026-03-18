@@ -216,12 +216,21 @@ class CESourceEditorViewController: NSViewController {
             tabWidth: config.tabWidth
         )
 
+        let behavior = SourceEditorConfiguration.Behavior(
+            indentOption: .spaces(count: config.tabWidth)
+        )
+
         let layout = SourceEditorConfiguration.Layout(
             contentInsets: config.contentInsets
         )
 
-        return SourceEditorConfiguration(appearance: appearance, layout: layout)
+        return SourceEditorConfiguration(
+            appearance: appearance,
+            behavior: behavior,
+            layout: layout
+        )
     }
+
 
     private func toRGB(_ color: NSColor) -> NSColor {
         guard let rgb = color.usingColorSpace(.deviceRGB) else { return color }
