@@ -30,8 +30,17 @@ class CESourceEditorViewController: NSViewController {
     
     // MARK: - Delegates
 
-    weak var completionDelegate: (any CodeSuggestionDelegate)?
-    weak var definitionDelegate: (any JumpToDefinitionDelegate)?
+    weak var completionDelegate: (any CodeSuggestionDelegate)? {
+        didSet {
+            textViewController?.completionDelegate = completionDelegate
+        }
+    }
+    
+    weak var definitionDelegate: (any JumpToDefinitionDelegate)? {
+        didSet {
+            textViewController?.jumpToDefinitionDelegate = definitionDelegate
+        }
+    }
     
     // MARK: - Init
     

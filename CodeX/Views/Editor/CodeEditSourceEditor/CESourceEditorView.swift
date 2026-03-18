@@ -93,8 +93,8 @@ struct CESourceEditorView: NSViewControllerRepresentable {
         }
         
         // Update delegates
-        // controller.completionDelegate = completionDelegate
-        // controller.definitionDelegate = definitionDelegate
+        controller.completionDelegate = completionDelegate
+        controller.definitionDelegate = definitionDelegate
     }
     
     func makeCoordinator() -> Coordinator {
