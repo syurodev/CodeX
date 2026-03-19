@@ -4,6 +4,7 @@ import SwiftUI
 @main
 struct CodeXApp: App {
     @State private var appViewModel = AppViewModel()
+    @State private var copilotService = CopilotService.shared
 
     var preferredColorScheme: ColorScheme? {
         switch appViewModel.settingsStore.settings.editorTheme {
@@ -18,7 +19,11 @@ struct CodeXApp: App {
             MainWindowView()
                 .environment(appViewModel)
                 .environment(appViewModel.settingsStore)
+                .environment(copilotService)
                 .preferredColorScheme(preferredColorScheme)
+                .task {
+                    await copilotService.check()
+                }
                 .onDisappear {
                     appViewModel.shutdownAgentRuntimes()
                 }
@@ -95,6 +100,7 @@ struct CodeXApp: App {
             SettingsWindowView()
                 .environment(appViewModel)
                 .environment(appViewModel.settingsStore)
+                .environment(copilotService)
                 .containerBackground(.thinMaterial, for: .window)
         }
         .defaultSize(width: 880, height: 560)

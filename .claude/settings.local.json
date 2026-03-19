@@ -36,7 +36,8 @@
       "Bash(gh issue:*)",
       "Bash(gh api:*)",
       "Bash(curl:*)",
-      "WebFetch(domain:zed.dev)"
+      "WebFetch(domain:zed.dev)",
+      "WebFetch(domain:docs.github.com)"
     ]
   }
 }

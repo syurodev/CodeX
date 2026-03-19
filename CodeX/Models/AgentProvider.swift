@@ -3,6 +3,7 @@ import Foundation
 
 enum AgentProviderID: String, CaseIterable, Identifiable {
     case claudeCode
+    case githubCopilot
 
     var id: String { rawValue }
 }
@@ -18,6 +19,13 @@ struct AgentProvider: Identifiable, Hashable {
         displayName: "Claude Code",
         subtitle: "ACP runtime via claude-agent-acp adapter",
         systemImage: "sparkles.rectangle.stack"
+    )
+
+    static let githubCopilot = AgentProvider(
+        id: .githubCopilot,
+        displayName: "GitHub Copilot",
+        subtitle: "Copilot CLI in ACP server mode",
+        systemImage: "bolt.horizontal.circle"
     )
 }
 
@@ -47,6 +55,17 @@ extension AgentProvider {
                 arguments = [package]
             }
 
+            return makeLaunchConfiguration(
+                command: executablePath,
+                arguments: arguments,
+                workingDirectory: workingDirectory
+            )
+        case .githubCopilot:
+            let executablePath = environment["CODEX_COPILOT_ACP_PATH"] ?? "copilot"
+            let arguments = environment["CODEX_COPILOT_ACP_ARGS"]?
+                .split(separator: " ")
+                .map(String.init)
+                ?? ["--acp", "--stdio"]
             return makeLaunchConfiguration(
                 command: executablePath,
                 arguments: arguments,
@@ -141,7 +160,8 @@ enum AgentRuntimeState: String {
 
 struct AgentProviderRegistry {
     static let availableProviders: [AgentProvider] = [
-        .claudeCode
+        .claudeCode,
+        .githubCopilot
     ]
 
     static func provider(for id: AgentProviderID) -> AgentProvider? {

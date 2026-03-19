@@ -1,5 +1,4 @@
 import Foundation
-import OSLog
 import SwiftUI
 
 struct AgentSidebarView: View {
@@ -220,11 +219,26 @@ private struct AgentRuntimeTabBarView: View {
 private struct AgentLauncherView: View {
     @Bindable var viewModel: AgentPanelViewModel
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(CopilotService.self) private var copilotService
 
     private var providerCardFill: Color {
         colorScheme == .dark
             ? .agentPanelSurface.opacity(0.48)
             : .agentPanelElevatedSurface.opacity(0.96)
+    }
+
+    /// Copilot đã sẵn sàng khởi chạy agent chưa
+    private var copilotReady: Bool {
+        if case .ready = copilotService.installState { return true }
+        return false
+    }
+
+    /// Nút Start Agent có thể bấm không
+    private var canStart: Bool {
+        switch viewModel.selectedLaunchProviderID {
+        case .claudeCode: return true
+        case .githubCopilot: return copilotReady
+        }
     }
 
     var body: some View {
@@ -265,12 +279,18 @@ private struct AgentLauncherView: View {
                 }
             }
 
+            // Copilot installation gate — chỉ hiện khi provider là Copilot
+            if viewModel.selectedLaunchProviderID == .githubCopilot {
+                CopilotInstallGateView(copilotService: copilotService)
+            }
+
             Button {
                 viewModel.startSelectedProvider()
             } label: {
                 Label("Start Agent", systemImage: "play.fill")
             }
             .buttonStyle(.borderedProminent)
+            .disabled(!canStart)
 
             Spacer()
         }
@@ -279,9 +299,182 @@ private struct AgentLauncherView: View {
     }
 }
 
+// MARK: - CopilotInstallGateView
+
+private struct CopilotInstallGateView: View {
+    @Bindable var copilotService: CopilotService
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Group {
+            switch copilotService.installState {
+            case .unknown:
+                EmptyView()
+                    .task { await copilotService.check() }
+
+            case .checking:
+                HStack(spacing: 8) {
+                    ProgressView().scaleEffect(0.75)
+                    Text("Checking Copilot installation…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(gateFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            case .notInstalled:
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("Copilot CLI not found", systemImage: "exclamationmark.triangle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.orange)
+                    Text("Install Copilot CLI to use GitHub Copilot as an agent. Homebrew is not available on this machine.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    installInstructions
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(gateFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            case .brewAvailable:
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("Copilot CLI not installed", systemImage: "exclamationmark.triangle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.orange)
+                    Text("Copilot CLI is required to use GitHub Copilot as an agent. You can install it automatically via Homebrew.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button {
+                        Task { await copilotService.installViaBrew() }
+                    } label: {
+                        Label("Install via Homebrew", systemImage: "arrow.down.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(gateFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            case .installing(let log):
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        ProgressView().scaleEffect(0.75)
+                        Text("Installing Copilot CLI…")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    ScrollView(.vertical) {
+                        Text(log)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 100)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(gateFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            case .authRequired:
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("Authentication required", systemImage: "person.badge.key.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.yellow)
+                    Text("Copilot CLI is installed but not signed in. Open Terminal to authenticate, then click Recheck.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        Button {
+                            copilotService.openTerminalForAuth()
+                        } label: {
+                            Label("Sign In", systemImage: "terminal")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+
+                        Button {
+                            Task { await copilotService.recheckAfterAuth() }
+                        } label: {
+                            Label("Recheck", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(gateFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            case .ready:
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Text("Copilot CLI is ready")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(gateFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            case .error(let msg):
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Error", systemImage: "xmark.circle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.red)
+                    Text(msg)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button {
+                        Task { await copilotService.check() }
+                    } label: {
+                        Label("Retry", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(gateFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private var gateFill: AnyShapeStyle {
+        AnyShapeStyle(.ultraThinMaterial)
+    }
+
+    @ViewBuilder
+    private var installInstructions: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Manual installation options:")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text("npm install -g @github/copilot")
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.secondary)
+            Text("curl -fsSL https://gh.io/copilot-install | bash")
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.secondary)
+            Button {
+                Task { await copilotService.check() }
+            } label: {
+                Label("Recheck after installing", systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .padding(.top, 4)
+        }
+    }
+}
+
 private struct AgentRuntimeContentView: View {
     @Bindable var viewModel: AgentRuntimeViewModel
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(CopilotService.self) private var copilotService
     @State private var draft = ""
     @State private var isPinnedToBottom = true
     @State private var unreadTranscriptCount = 0
@@ -340,6 +533,11 @@ private struct AgentRuntimeContentView: View {
         ZStack(alignment: .bottom) {
             ScrollViewReader { proxy in
                 transcriptScrollView(proxy: proxy)
+            }
+
+            // Auth required banner — chỉ hiện khi Copilot chưa đăng nhập
+            if viewModel.requiresAuthentication {
+                copilotAuthBanner
             }
 
             AgentPromptComposerView(
@@ -488,6 +686,45 @@ private struct AgentRuntimeContentView: View {
         unreadTranscriptCount = 0
         isPinnedToBottom = true
         scrollTranscriptToBottom(using: proxy, animated: true)
+    }
+
+    // MARK: - Copilot Auth Banner
+
+    @ViewBuilder
+    private var copilotAuthBanner: some View {
+        VStack(spacing: 12) {
+            Label("Authentication Required", systemImage: "person.badge.key.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+
+            Text("GitHub Copilot requires you to sign in before starting a session.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            HStack(spacing: 10) {
+                Button {
+                    copilotService.openTerminalForAuth()
+                } label: {
+                    Label("Sign In", systemImage: "terminal")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+
+                Button {
+                    viewModel.retryAfterAuthentication()
+                } label: {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.horizontal, composerOuterPadding)
+        .padding(.bottom, transcriptBottomClearance + composerOuterPadding)
     }
 }
 
@@ -698,7 +935,6 @@ private struct AgentMessageRowView: View {
 
             if message.role == .assistant {
                 AgentStreamingAssistantTextView(
-                    debugID: message.id,
                     content: message.content,
                     isStreaming: isStreaming
                 )
@@ -818,45 +1054,10 @@ private struct AgentActivityGroupView: View {
     }
 }
 
-private enum AgentPanelStreamingDebug {
-    private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "CodeX",
-        category: "AgentPanelStreaming"
-    )
-
-    private static let enabled: Bool = {
-        let env = ProcessInfo.processInfo.environment
-        let raw = env["CODEX_AGENT_STREAM_DEBUG"] ?? env["CODEX_DEBUG_AGENT_STREAM"] ?? ""
-        switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "1", "true", "yes", "on":
-            return true
-        default:
-            return false
-        }
-    }()
-
-    static func log(_ message: String) {
-        guard enabled else { return }
-        logger.debug("\(message, privacy: .public)")
-    }
-
-    static func preview(_ text: String, limit: Int = 32) -> String {
-        let sanitized = text
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\r", with: "\\r")
-        if sanitized.count <= limit {
-            return sanitized
-        }
-
-        return String(sanitized.prefix(limit)) + "…"
-    }
-}
-
 /// Streams assistant text with a blur-in effect on ONLY the newly arrived
 /// delta. Previously stable text is drawn without any animation, so there is
 /// no full-message flicker on every update.
 private struct AgentStreamingAssistantTextView: View {
-    let debugID: AgentMessage.ID
     let content: String
     let isStreaming: Bool
 
@@ -864,8 +1065,6 @@ private struct AgentStreamingAssistantTextView: View {
     @State private var stableContent = ""
     /// The newest delta currently animating in.
     @State private var animatedSuffix = ""
-    /// Incremented each time we want to start a fresh animation cycle.
-    @State private var animationTrigger = 0
     @State private var debounceTask: Task<Void, Never>?
     @State private var animationCompletionTask: Task<Void, Never>?
     @State private var targetContent = ""
@@ -874,10 +1073,6 @@ private struct AgentStreamingAssistantTextView: View {
 
     private let debounceNs: UInt64 = 70_000_000  // 70 ms
     private let animDuration: Double = 0.5
-
-    private var debugLabel: String {
-        String(debugID.uuidString.prefix(8))
-    }
 
     var body: some View {
         Group {
@@ -892,7 +1087,6 @@ private struct AgentStreamingAssistantTextView: View {
         .foregroundStyle(.primary.opacity(0.96))
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear {
-            debugLog("onAppear", preview: content)
             targetContent = content
             if isStreaming && !content.isEmpty {
                 // Chunks may have all arrived before this view's first render
@@ -900,33 +1094,25 @@ private struct AgentStreamingAssistantTextView: View {
                 // so the blur-in animation still triggers.
                 schedule(content)
             } else {
-                commitImmediately(content, reason: "onAppearStatic")
+                commitImmediately(content)
             }
         }
         .onDisappear {
-            debugLog("onDisappear")
             debounceTask?.cancel()
             debounceTask = nil
             animationCompletionTask?.cancel()
             animationCompletionTask = nil
         }
-        .onChange(of: content) { old, new in
-            AgentPanelStreamingDebug.log(
-                "[AgentStreamingAssistantTextView][\(debugLabel)] contentChanged "
-                + "old=\(old.count) new=\(new.count) appended=\(new.hasPrefix(old)) "
-                + "preview=\"\(AgentPanelStreamingDebug.preview(new))\""
-            )
-            logAppendBeforeExpectedVisualFinishIfNeeded(newContent: new)
+        .onChange(of: content) { _, new in
             targetContent = new
             schedule(new)
         }
         .onChange(of: isStreaming) { _, streaming in
-            debugLog("streamingChanged -> \(streaming)", preview: content)
             if !streaming {
                 debounceTask?.cancel()
                 debounceTask = nil
                 if !isAnimatingBatch {
-                    startNextBatchIfNeeded(reason: "streamEnded")
+                    startNextBatchIfNeeded()
                 }
             }
         }
@@ -995,60 +1181,43 @@ private struct AgentStreamingAssistantTextView: View {
     }
 
     private func schedule(_ new: String) {
-        AgentPanelStreamingDebug.log(
-            "[AgentStreamingAssistantTextView][\(debugLabel)] schedule "
-            + "streaming=\(isStreaming) new=\(new.count) stable=\(stableContent.count) "
-            + "animated=\(animatedSuffix.count) target=\(targetContent.count) "
-            + "animating=\(isAnimatingBatch) hadPendingTask=\(debounceTask != nil) "
-            + "preview=\"\(AgentPanelStreamingDebug.preview(new))\""
-        )
-
         let displayed = stableContent + animatedSuffix
         guard displayed.isEmpty || new.hasPrefix(displayed) else {
-            commitImmediately(new, reason: "rewritten")
+            commitImmediately(new)
             return
         }
 
         guard isStreaming else {
             if !isAnimatingBatch {
-                startNextBatchIfNeeded(reason: "nonStreamingUpdate")
+                startNextBatchIfNeeded()
             }
             return
         }
 
-        guard !isAnimatingBatch else {
-            debugLog("bufferedWhileAnimating", preview: new)
-            return
-        }
+        guard !isAnimatingBatch else { return }
 
         debounceTask?.cancel()
         debounceTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: debounceNs)
             guard !Task.isCancelled else { return }
-            startNextBatchIfNeeded(reason: "debounced")
+            startNextBatchIfNeeded()
         }
     }
 
-    private func startNextBatchIfNeeded(reason: String) {
+    private func startNextBatchIfNeeded() {
         debounceTask?.cancel()
         debounceTask = nil
 
         guard !isAnimatingBatch else { return }
 
         guard targetContent.hasPrefix(stableContent) || stableContent.isEmpty else {
-            commitImmediately(targetContent, reason: "targetRewrite")
+            commitImmediately(targetContent)
             return
         }
 
         let remaining = targetContent.hasPrefix(stableContent)
             ? String(targetContent.dropFirst(stableContent.count))
             : ""
-        AgentPanelStreamingDebug.log(
-            "[AgentStreamingAssistantTextView][\(debugLabel)] startNextBatch "
-            + "reason=\(reason) streaming=\(isStreaming) stable=\(stableContent.count) "
-            + "target=\(targetContent.count) remaining=\(remaining.count) "
-            + "preview=\"\(AgentPanelStreamingDebug.preview(remaining))\""
-        )
 
         guard !remaining.isEmpty else {
             if !isStreaming {
@@ -1059,18 +1228,13 @@ private struct AgentStreamingAssistantTextView: View {
         }
 
         guard let batch = AgentStreamingTextBatching.batches(for: remaining).first else {
-            commitImmediately(targetContent, reason: "noBatch")
+            commitImmediately(targetContent)
             return
         }
 
         animatedSuffix = batch.text
         isAnimatingBatch = true
         animationStartedAt = Date()
-        animationTrigger += 1
-        debugLog(
-            "animationTrigger -> \(animationTrigger) batch=\(batch.index + 1)/\(batch.totalCount)",
-            preview: batch.text
-        )
         scheduleAnimationCompletion()
     }
 
@@ -1092,12 +1256,10 @@ private struct AgentStreamingAssistantTextView: View {
             return
         }
 
-        let completedBatch = animatedSuffix
-        stableContent += completedBatch
+        stableContent += animatedSuffix
         animatedSuffix = ""
         isAnimatingBatch = false
         animationStartedAt = nil
-        debugLog("animationCompleted", preview: completedBatch)
 
         guard targetContent != stableContent else {
             if !isStreaming {
@@ -1107,87 +1269,24 @@ private struct AgentStreamingAssistantTextView: View {
         }
 
         guard targetContent.hasPrefix(stableContent) else {
-            commitImmediately(targetContent, reason: "completionRewrite")
+            commitImmediately(targetContent)
             return
         }
 
-        startNextBatchIfNeeded(reason: isStreaming ? "continueQueued" : "drainAfterStreamEnd")
+        startNextBatchIfNeeded()
     }
 
-    private func commitImmediately(_ new: String, reason: String) {
+    private func commitImmediately(_ new: String) {
         debounceTask?.cancel()
         debounceTask = nil
         animationCompletionTask?.cancel()
         animationCompletionTask = nil
-
-        logPrematureAnimationBypassIfNeeded(reason: reason, newContent: new)
 
         stableContent = new
         animatedSuffix = ""
         targetContent = new
         isAnimatingBatch = false
         animationStartedAt = nil
-        debugLog("committedWithoutAnimation[\(reason)]", preview: new)
-    }
-
-    private func logAppendBeforeExpectedVisualFinishIfNeeded(newContent: String) {
-        guard isAnimatingBatch,
-            let elapsedSeconds = currentAnimationElapsedSeconds(),
-            elapsedSeconds < animDuration
-        else {
-            return
-        }
-
-        let visibleContent = stableContent + animatedSuffix
-        let bufferedDelta = newContent.hasPrefix(visibleContent)
-            ? String(newContent.dropFirst(visibleContent.count))
-            : newContent
-        AgentPanelStreamingDebug.log(
-            "[AgentStreamingAssistantTextView][\(debugLabel)] appendBeforeExpectedVisualFinish "
-            + "elapsed=\(formatSeconds(elapsedSeconds))s "
-            + "duration=\(formatSeconds(animDuration))s "
-            + "visible=\(visibleContent.count) incoming=\(newContent.count) buffered=\(bufferedDelta.count) "
-            + "note=if buffered text is already visible in UI now, animation is not working "
-            + "preview=\"\(AgentPanelStreamingDebug.preview(bufferedDelta))\""
-        )
-    }
-
-    private func logPrematureAnimationBypassIfNeeded(reason: String, newContent: String) {
-        guard isAnimatingBatch,
-            let elapsedSeconds = currentAnimationElapsedSeconds(),
-            elapsedSeconds < animDuration
-        else {
-            return
-        }
-
-        AgentPanelStreamingDebug.log(
-            "[AgentStreamingAssistantTextView][\(debugLabel)] prematureAnimationBypass "
-            + "reason=\(reason) elapsed=\(formatSeconds(elapsedSeconds))s "
-            + "duration=\(formatSeconds(animDuration))s "
-            + "stable=\(stableContent.count) animated=\(animatedSuffix.count) new=\(newContent.count) "
-            + "preview=\"\(AgentPanelStreamingDebug.preview(newContent))\""
-        )
-    }
-
-    private func currentAnimationElapsedSeconds() -> Double? {
-        guard let animationStartedAt else { return nil }
-        return Date().timeIntervalSince(animationStartedAt)
-    }
-
-    private func formatSeconds(_ value: Double) -> String {
-        String(format: "%.3f", value)
-    }
-
-    private func debugLog(_ event: String, preview: String? = nil) {
-        var message = "[AgentStreamingAssistantTextView][\(debugLabel)] \(event) "
-        message += "streaming=\(isStreaming) content=\(content.count) "
-        message += "stable=\(stableContent.count) animated=\(animatedSuffix.count) "
-        message += "target=\(targetContent.count) animating=\(isAnimatingBatch) "
-        message += "trigger=\(animationTrigger)"
-        if let preview {
-            message += " preview=\"\(AgentPanelStreamingDebug.preview(preview))\""
-        }
-        AgentPanelStreamingDebug.log(message)
     }
 }
 
@@ -1257,8 +1356,8 @@ struct AgentStreamingTextBatch: Equatable {
 }
 
 enum AgentStreamingTextBatching {
-    private static let minimumCharactersPerBatch = 12
-    private static let maximumCharactersPerBatch = 24
+    private static let minimumCharactersPerBatch = 28
+    private static let maximumCharactersPerBatch = 70
 
     static func batches(for text: String) -> [AgentStreamingTextBatch] {
         let characters = Array(text)

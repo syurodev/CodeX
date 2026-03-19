@@ -1811,7 +1811,7 @@ private struct AICompletionSettingsView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("AI Completion")
                             .font(.largeTitle.weight(.semibold))
-                        Text("Run AI-powered code suggestions entirely on your device. No data is sent to the cloud.")
+                        Text("Enable on-device AI code suggestions powered by a compact local model. Runs fully on Apple Silicon — no internet connection required.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)

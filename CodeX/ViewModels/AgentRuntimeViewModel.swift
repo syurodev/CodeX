@@ -1,4 +1,5 @@
 import ACPClient
+import ACPModel
 import Foundation
 
 enum AgentMessageRole: String {
@@ -254,6 +255,7 @@ final class AgentRuntimeViewModel: Identifiable {
     var messages: [AgentMessage]
     var activities: [AgentActivity]
     var lastError: String?
+    var requiresAuthentication = false
 
     private let transportFactory: AgentRuntimeTransportFactory
     private var transport: (any AgentRuntimeTransporting)?
@@ -795,13 +797,35 @@ final class AgentRuntimeViewModel: Identifiable {
         return String(compact[..<endIndex]) + "…"
     }
 
+    func retryAfterAuthentication() {
+        requiresAuthentication = false
+        lastError = nil
+        Task { await bootstrapRuntimeIfNeeded(forceRestart: true) }
+    }
+
     private func applyError(_ error: Error, prefix: String) {
         markRunningActivitiesFailed()
-        let message = "\(prefix): \(error.localizedDescription)"
         logDebug("\(prefix) | \(ACPClientErrorFormatter.debugDescription(for: error))")
+
+        // Detect "Authentication required" từ ACP error code -32000
+        if isAuthenticationError(error) {
+            requiresAuthentication = true
+            state = .error
+            return
+        }
+
+        let message = "\(prefix): \(error.localizedDescription)"
         lastError = message
         state = .error
         messages.append(AgentMessage(role: .system, content: message))
+    }
+
+    private func isAuthenticationError(_ error: Error) -> Bool {
+        if let clientError = error as? ClientError,
+           case .agentError(let jsonError) = clientError,
+           jsonError.code == -32000 { return true }
+        // Fallback: check localizedDescription
+        return error.localizedDescription.lowercased().contains("authentication required")
     }
 
     private func markRunningActivitiesFailed() {
