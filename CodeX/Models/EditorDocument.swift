@@ -16,7 +16,9 @@ class EditorDocument: Identifiable {
     var symbols: [DocumentSymbol] = []
     var isFetchingSymbols: Bool = false
 
-    // LSP Diagnostics
+    // Diagnostics — LSP and Biome are tracked separately, exposed as one merged array
+    var lspDiagnostics: [Diagnostic] = [] { didSet { diagnostics = lspDiagnostics + biomeDiagnostics } }
+    var biomeDiagnostics: [Diagnostic] = [] { didSet { diagnostics = lspDiagnostics + biomeDiagnostics } }
     var diagnostics: [Diagnostic] = []
     
     enum LSPStatus: Equatable {
@@ -101,5 +103,32 @@ class EditorDocument: Identifiable {
                 }
             }
         }
+    }
+    
+    func nsRange(fromLSPRange range: (start: (Int, Int), end: (Int, Int))) -> NSRange {
+        let lines = text.components(separatedBy: "\n")
+        
+        var startLocation = 0
+        for i in 0..<range.start.0 {
+            if i < lines.count {
+                startLocation += (lines[i] as NSString).length + 1
+            }
+        }
+        startLocation += range.start.1
+        
+        var endLocation = 0
+        for i in 0..<range.end.0 {
+            if i < lines.count {
+                endLocation += (lines[i] as NSString).length + 1
+            }
+        }
+        endLocation += range.end.1
+        
+        // Ensure within bounds
+        let fullLength = (text as NSString).length
+        startLocation = min(startLocation, fullLength)
+        endLocation = min(endLocation, fullLength)
+        
+        return NSRange(location: startLocation, length: max(0, endLocation - startLocation))
     }
 }

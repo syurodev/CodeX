@@ -41,14 +41,14 @@ public struct CursorPosition: Equatable, Hashable {
     }
 }
 
-public enum DiagnosticSeverity {
+public enum DiagnosticSeverity: Equatable {
     case error
     case warning
     case info
     case hint
 }
 
-public struct Diagnostic {
+public struct Diagnostic: Equatable {
     public var range: NSRange
     public var severity: DiagnosticSeverity
     public var message: String

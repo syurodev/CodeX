@@ -51,7 +51,6 @@ struct SingleCodeEditorView: View {
             get: { document.text },
             set: { newValue in
                 document.text = newValue
-                viewModel.documentTextChanged(id: document.id, newText: newValue)
             }
         )
 
@@ -60,10 +59,16 @@ struct SingleCodeEditorView: View {
             set: { newValue in document.editorState = newValue }
         )
 
+        let diagnosticsBinding = Binding<[CodeX.Diagnostic]>(
+            get: { document.diagnostics },
+            set: { newValue in document.diagnostics = newValue }
+        )
+
         GeometryReader { proxy in
             CESourceEditorView(
                 text: textBinding,
                 editorState: stateBinding,
+                diagnostics: diagnosticsBinding,
                 language: document.language,
                 configuration: viewModel.editorConfiguration(
                     for: colorScheme,

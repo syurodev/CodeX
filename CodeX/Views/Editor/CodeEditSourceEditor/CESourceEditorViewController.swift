@@ -22,6 +22,7 @@ class CESourceEditorViewController: NSViewController {
     var language: CodeLanguage
     var configuration: EditorConfiguration
     var editorState: EditorState
+    var diagnostics: [CodeX.Diagnostic] = []
     
     // MARK: - Callbacks
     
@@ -48,11 +49,13 @@ class CESourceEditorViewController: NSViewController {
         text: String,
         language: CodeLanguage,
         configuration: EditorConfiguration,
-        editorState: EditorState
+        editorState: EditorState,
+        diagnostics: [CodeX.Diagnostic]
     ) {
         self.language = language
         self.configuration = configuration
         self.editorState = editorState
+        self.diagnostics = diagnostics
         
         super.init(nibName: nil, bundle: nil)
         
@@ -72,6 +75,9 @@ class CESourceEditorViewController: NSViewController {
             cursorPositions: cursorPositions
         )
         
+        // Pass initial diagnostics
+        textViewController.diagnostics = diagnostics.map { mapDiagnostic($0) }
+        
         // Setup notifications
         setupNotifications()
     }
@@ -85,16 +91,9 @@ class CESourceEditorViewController: NSViewController {
     override func loadView() {
         view = NSView()
 
-        print("🔵 [CESourceEditor] loadView - setting delegates")
-        print("🔵 [CESourceEditor] completionDelegate: \(completionDelegate != nil)")
-        print("🔵 [CESourceEditor] definitionDelegate: \(definitionDelegate != nil)")
-
         // Set delegates
         textViewController.completionDelegate = completionDelegate
         textViewController.jumpToDefinitionDelegate = definitionDelegate
-
-        print("🔵 [CESourceEditor] textViewController.completionDelegate: \(textViewController.completionDelegate != nil)")
-        print("🔵 [CESourceEditor] textViewController.jumpToDefinitionDelegate: \(textViewController.jumpToDefinitionDelegate != nil)")
 
         // Add text view controller as child
         addChild(textViewController)
@@ -112,7 +111,6 @@ class CESourceEditorViewController: NSViewController {
     // MARK: - Setup
     
     private func setupNotifications() {
-        print("🔵 [CESourceEditor] setupNotifications - registering for text changes")
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(textDidChange),
@@ -157,7 +155,6 @@ class CESourceEditorViewController: NSViewController {
 
     @objc private func textDidChange(_ notification: Notification) {
         let newText = textViewController.text
-        print("🟢 [CESourceEditor] textDidChange FIRED - length: \(newText.count)")
         onTextChange?(newText)
     }
     
@@ -201,6 +198,12 @@ class CESourceEditorViewController: NSViewController {
         }
     }
     
+    func updateDiagnostics(_ newDiagnostics: [CodeX.Diagnostic]) {
+        guard diagnostics != newDiagnostics else { return }
+        diagnostics = newDiagnostics
+        textViewController.diagnostics = newDiagnostics.map { mapDiagnostic($0) }
+    }
+    
     // MARK: - Helpers
     
     private func createSourceEditorConfiguration(from config: EditorConfiguration) -> SourceEditorConfiguration {
@@ -235,6 +238,21 @@ class CESourceEditorViewController: NSViewController {
     private func toRGB(_ color: NSColor) -> NSColor {
         guard let rgb = color.usingColorSpace(.deviceRGB) else { return color }
         return rgb
+    }
+
+    private func mapDiagnostic(_ diag: CodeX.Diagnostic) -> CodeEditSourceEditor.Diagnostic {
+        let ceSeverity: CodeEditSourceEditor.DiagnosticSeverity
+        switch diag.severity {
+        case .error: ceSeverity = .error
+        case .warning: ceSeverity = .warning
+        case .info: ceSeverity = .info
+        case .hint: ceSeverity = .hint
+        }
+        return CodeEditSourceEditor.Diagnostic(
+            range: diag.range,
+            severity: ceSeverity,
+            message: diag.message
+        )
     }
 
     private func mapTheme(_ theme: EditorTheme) -> CodeEditSourceEditor.EditorTheme {

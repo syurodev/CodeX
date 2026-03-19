@@ -93,6 +93,7 @@ class LanguageClientService {
     private let lspBuffer = LSPBuffer()
 
     var isInitialized = false
+    var onNotification: ((String, [String: Any]) -> Void)?
 
     init(process: Process) {
         self.process = process
@@ -178,6 +179,11 @@ class LanguageClientService {
         var fullData = Data()
         fullData.append(headerData)
         fullData.append(jsonData)
+        
+        if let method = data["method"] as? String {
+            print("📤 [LSP] Sending request/notification: \(method)")
+        }
+        
         try? inputPipe.fileHandleForWriting.write(contentsOf: fullData)
     }
     
@@ -191,6 +197,9 @@ class LanguageClientService {
             Task {
                 await self.lspBuffer.append(data)
                 let messages = await self.lspBuffer.drainMessages()
+                if !messages.isEmpty {
+                    print("📥 [LSP] Drained \(messages.count) messages from buffer")
+                }
                 for body in messages {
                     await self.handleMessage(body)
                 }
@@ -223,9 +232,17 @@ class LanguageClientService {
                 // Đây là response cho request của client
                 await store.resolve(id: id, result: json["result"])
             }
-        } else if let _ = json["method"] as? String {
+        } else if let method = json["method"] as? String {
             // Notification (không có id)
-            // print("📩 LSP notification: \(method)")
+            let params = json["params"] as? [String: Any] ?? [:]
+            if method == "textDocument/publishDiagnostics" {
+                let diagCount = (params["diagnostics"] as? [[String: Any]])?.count ?? 0
+                let uri = (params["uri"] as? String) ?? "unknown"
+                print("🔔 [LSP] publishDiagnostics: \(diagCount) diag(s) for \((uri as NSString).lastPathComponent)")
+            } else {
+                print("🔔 [LSP] Notification received: \(method)")
+            }
+            onNotification?(method, params)
         }
     }
     

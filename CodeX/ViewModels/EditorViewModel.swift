@@ -23,7 +23,7 @@ class EditorViewModel {
             if let doc = currentDocument {
                 doc.text = newValue
                 syncTextWithLSP(url: doc.url, text: newValue)
-                triggerLint(url: doc.url)
+                scheduleBiomeCheck(for: doc.url)
             }
         }
     }
@@ -31,17 +31,66 @@ class EditorViewModel {
     func documentTextChanged(id: UUID, newText: String) {
         if let index = openDocuments.firstIndex(where: { $0.id == id }) {
             let doc = openDocuments[index]
-            // NOTE: Do NOT call syncTextWithLSP here.
+            // NOTE: Do NOT call syncTextWithLSP here synchronously.
             // This function is invoked via DispatchQueue.main.async (from the text change
             // notification chain), so it may run *during* a completion await with a stale
             // `newText` captured from an earlier keystroke. Sending that old text with a
             // higher version number would corrupt the LSP document state and cause Deno to
             // return null completions. LSP sync is done just-in-time inside each LSP query.
-            triggerLint(url: doc.url)
+            //
+            // However, for diagnostics we schedule a debounced sync that reads doc.text
+            // at fire time (not the potentially-stale `newText`).
+            scheduleLSPSync(for: doc.url)
+            scheduleBiomeCheck(for: doc.url)
 
             // Re-fetch symbols on text change (debounced implicitly in some cases, or we can just call it)
             if let root = appViewModelProjectRoot() {
                 doc.fetchSymbolsIfSupported(projectRoot: root)
+            }
+        }
+    }
+
+    /// Debounce LSP didChange by 500 ms so diagnostics are refreshed after the user stops typing.
+    private func scheduleLSPSync(for url: URL) {
+        lspSyncTask?.cancel()
+        lspSyncTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled, let self else { return }
+            if let doc = self.openDocuments.first(where: { $0.url == url }) {
+                self.syncTextWithLSP(url: url, text: doc.text)
+            }
+        }
+    }
+
+    /// Debounce Biome diagnostics so we don't spawn a formatter/linter process per keystroke.
+    private var biomeCheckTask: Task<Void, Never>?
+    private func scheduleBiomeCheck(for url: URL) {
+        biomeCheckTask?.cancel()
+        biomeCheckTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(450))
+            guard let self, !Task.isCancelled else { return }
+
+            // Snapshot everything we need on the main actor.
+            let (text, projectRoot, formatConfig, docRef): (String, URL?, DefaultFormatConfig, EditorDocument?) =
+                await MainActor.run {
+                    guard let doc = self.openDocuments.first(where: { $0.url == url }) else {
+                        return ("", nil, self.settingsStore.settings.format.default_style, nil)
+                    }
+                    return (doc.text, self.appViewModelProjectRoot(), self.settingsStore.settings.format.default_style, doc)
+                }
+
+            guard let docRef, !text.isEmpty, !Task.isCancelled else { return }
+
+            let diags = await BiomeService.shared.check(
+                text: text,
+                fileURL: url,
+                projectRoot: projectRoot,
+                formatConfig: formatConfig
+            )
+
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                docRef.biomeDiagnostics = diags
             }
         }
     }
@@ -55,6 +104,8 @@ class EditorViewModel {
     private var lspService: LanguageClientService?
     /// Monotonically increasing version counter per document URI for LSP didChange notifications.
     private var lspDocumentVersions: [URL: Int] = [:]
+    /// Debounced LSP sync task — cancelled and replaced on each keystroke.
+    private var lspSyncTask: Task<Void, Never>?
     /// Cached completion items from the last LSP response, used by completionOnCursorMove for
     /// client-side filtering so we don't re-query LSP on every keystroke.
     private var cachedCompletionItems: [CodeSuggestionEntry] = []
@@ -169,8 +220,21 @@ class EditorViewModel {
 
     private func startLSP(for url: URL, projectRoot: URL? = nil) {
         let root = projectRoot ?? url.deletingLastPathComponent()
-        guard let service = LSPManager.shared.startTypeScriptLSP(projectRoot: root) else { return }
+        print("🌐 [LSP] Starting TypeScript LSP for: \(url.lastPathComponent) at root: \(root.path)")
+        guard let service = LSPManager.shared.startTypeScriptLSP(projectRoot: root) else { 
+            print("❌ [LSP] Failed to start LSP for: \(url.lastPathComponent)")
+            return 
+        }
         self.lspService = service
+        
+        service.onNotification = { [weak self] method, params in
+            guard let self = self else { return }
+            if method == "textDocument/publishDiagnostics" {
+                Task { @MainActor in
+                    self.handleDiagnostics(params)
+                }
+            }
+        }
 
         Task {
             if !service.isInitialized {
@@ -190,6 +254,11 @@ class EditorViewModel {
                             "hover": ["contentFormat": ["markdown", "plaintext"]],
                             "documentSymbol": [
                                 "hierarchicalDocumentSymbolSupport": true
+                            ],
+                            "publishDiagnostics": [
+                                "relatedInformation": true,
+                                "versionSupport": true,
+                                "codeDescriptionSupport": true
                             ]
                         ],
                         "workspace": [
@@ -226,6 +295,8 @@ class EditorViewModel {
         default: languageId = "typescript"
         }
         let docText = openDocuments.first(where: { $0.url == url })?.text ?? ""
+        print("🌐 [LSP] Sending didOpen for: \(url.lastPathComponent)")
+        lspDocumentVersions[url] = 1
         lspService?.sendNotification(method: "textDocument/didOpen", params: [
             "textDocument": [
                 "uri": url.absoluteString,
@@ -236,21 +307,70 @@ class EditorViewModel {
         ])
     }
 
+    private func handleDiagnostics(_ params: [String: Any]) {
+        guard let uriString = params["uri"] as? String,
+              let url = URL(string: uriString),
+              let diagArray = params["diagnostics"] as? [[String: Any]] else { return }
+
+        print("🌐 [LSP] Received \(diagArray.count) diagnostics for: \(url.lastPathComponent)")
+
+        guard let doc = openDocuments.first(where: {
+            $0.url.standardizedFileURL.absoluteString == url.standardizedFileURL.absoluteString
+        }) else { return }
+
+        // If diagnostics includes `version`, ignore older/stale payloads.
+        if let serverVersion = (params["version"] as? Int) ??
+            ((params["version"] as? Double).map { Int($0) }) {
+            if let expectedVersion = lspVersion(for: doc.url), serverVersion < expectedVersion {
+                return
+            }
+        }
+
+        let parsed: [CodeX.Diagnostic] = diagArray.compactMap { dict in
+            guard let rangeDict = dict["range"] as? [String: Any],
+                  let startDict = rangeDict["start"] as? [String: Any],
+                  let endDict   = rangeDict["end"]   as? [String: Any],
+                  let sLine = startDict["line"]      as? Int,
+                  let sChar = startDict["character"] as? Int,
+                  let eLine = endDict["line"]        as? Int,
+                  let eChar = endDict["character"]   as? Int,
+                  let message = dict["message"]      as? String else { return nil }
+
+            let severityInt = dict["severity"] as? Int ?? 1
+            let severity: DiagnosticSeverity
+            switch severityInt {
+            case 1: severity = .error
+            case 2: severity = .warning
+            case 3: severity = .info
+            case 4: severity = .hint
+            default: severity = .error
+            }
+
+            let range = doc.nsRange(fromLSPRange: (start: (sLine, sChar), end: (eLine, eChar)))
+            return CodeX.Diagnostic(range: range, severity: severity, message: message)
+        }
+
+        doc.lspDiagnostics = parsed
+    }
+
+    private func lspVersion(for url: URL) -> Int? {
+        if let v = lspDocumentVersions[url] { return v }
+        if let key = lspDocumentVersions.keys.first(where: {
+            $0.standardizedFileURL.absoluteString == url.standardizedFileURL.absoluteString
+        }) {
+            return lspDocumentVersions[key]
+        }
+        return nil
+    }
+
     private func syncTextWithLSP(url: URL, text: String) {
         let version = (lspDocumentVersions[url] ?? 1) + 1
         lspDocumentVersions[url] = version
+        print("🌐 [LSP] Syncing text (v\(version)) for: \(url.lastPathComponent)")
         lspService?.sendNotification(method: "textDocument/didChange", params: [
             "textDocument": ["uri": url.absoluteString, "version": version],
             "contentChanges": [["text": text]]
         ])
-    }
-
-    private func triggerLint(url: URL) {
-        let projectRoot = appViewModelProjectRoot()
-        let formatConfig = settingsStore.settings.format.default_style
-        Task {
-            _ = await BiomeService.shared.lint(fileURL: url, projectRoot: projectRoot, formatConfig: formatConfig)
-        }
     }
 
     /// Reload nội dung của một document đang mở từ đĩa và sync với LSP.
@@ -261,6 +381,7 @@ class EditorViewModel {
         doc.text = content
         doc.isModified = false
         syncTextWithLSP(url: url, text: content)
+        scheduleBiomeCheck(for: url)
     }
 
     /// Saves the current document's in-memory text back to disk.

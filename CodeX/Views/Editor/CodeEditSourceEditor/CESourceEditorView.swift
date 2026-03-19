@@ -19,6 +19,9 @@ struct CESourceEditorView: NSViewControllerRepresentable {
     /// The editor state (cursor position, scroll position)
     @Binding var editorState: EditorState
     
+    /// The diagnostics (errors, warnings)
+    @Binding var diagnostics: [CodeX.Diagnostic]
+    
     // MARK: - Configuration
     
     /// The language for syntax highlighting
@@ -47,7 +50,8 @@ struct CESourceEditorView: NSViewControllerRepresentable {
             text: text,
             language: language,
             configuration: configuration,
-            editorState: editorState
+            editorState: editorState,
+            diagnostics: diagnostics
         )
         
         // Set callbacks
@@ -86,11 +90,11 @@ struct CESourceEditorView: NSViewControllerRepresentable {
             controller.updateLanguage(language)
         }
 
-        // Update editor state if changed
-        if controller.editorState != editorState {
-            print("⚠️ [updateNSVC] editorState mismatch — triggering updateEditorState")
-            controller.updateEditorState(editorState)
-        }
+        // Update editor state
+        controller.updateEditorState(editorState)
+
+        // Update diagnostics
+        controller.updateDiagnostics(diagnostics)
         
         // Update delegates
         controller.completionDelegate = completionDelegate
@@ -122,7 +126,6 @@ struct CESourceEditorView: NSViewControllerRepresentable {
         }
         
         func updateText(_ newText: String) {
-            print("🟢 [Coordinator] updateText - length: \(newText.count)")
             text.wrappedValue = newText
             onTextChange?(newText)
         }
