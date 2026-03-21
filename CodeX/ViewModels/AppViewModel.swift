@@ -3,6 +3,10 @@ import AppKit
 
 import Foundation
 
+enum BottomPanelTab {
+    case terminal, diagnostics
+}
+
 @MainActor
 @Observable
 class AppViewModel {
@@ -14,8 +18,17 @@ class AppViewModel {
     var projectRunViewModel = ProjectRunViewModel()
     var agentPanelViewModel = AgentPanelViewModel()
     var terminalPanelViewModel = TerminalPanelViewModel()
-    var isTerminalPanelPresented = false
+    var activeBottomPanel: BottomPanelTab? = nil
     var terminalPanelHeight: CGFloat = 260
+
+    /// Backward-compat computed property — dùng để không phải đổi tất cả chỗ cũ.
+    var isTerminalPanelPresented: Bool {
+        get { activeBottomPanel == .terminal }
+        set {
+            if newValue { activeBottomPanel = .terminal }
+            else if activeBottomPanel == .terminal { activeBottomPanel = nil }
+        }
+    }
     var selectedSidebarTab: SidebarTab = .explorer
     var splitViewVisibility: NavigationSplitViewVisibility = .all
     var isAgentInspectorPresented = false
@@ -87,10 +100,12 @@ class AppViewModel {
         project = Project(name: name, rootURL: url)
         agentPanelViewModel.updateWorkspaceRoot(url)
         editorViewModel.closeAllDocuments()
+        editorViewModel.workspaceStore.clear()
         fileNavigatorViewModel.loadDirectory(at: url, using: fileSystemService)
         gitViewModel.load(url: url, using: gitService)
         refreshGitFileStatuses()
         projectRunViewModel.detect(in: url)
+        editorViewModel.startWorkspaceIndex(root: url)
 
         // Load AI model when a project is opened (if enabled and available)
         let ai = settingsStore.settings.aiCompletion
@@ -100,11 +115,17 @@ class AppViewModel {
     }
 
     func toggleTerminalPanel() {
-        if !isTerminalPanelPresented && terminalPanelViewModel.sessions.isEmpty {
+        if activeBottomPanel != .terminal && terminalPanelViewModel.sessions.isEmpty {
             terminalPanelViewModel.newSession(workingDirectory: project?.rootURL)
         }
         withAnimation(.easeInOut(duration: 0.2)) {
-            isTerminalPanelPresented.toggle()
+            activeBottomPanel = activeBottomPanel == .terminal ? nil : .terminal
+        }
+    }
+
+    func toggleDiagnosticsPanel() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            activeBottomPanel = activeBottomPanel == .diagnostics ? nil : .diagnostics
         }
     }
 

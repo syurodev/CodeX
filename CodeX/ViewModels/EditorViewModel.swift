@@ -13,6 +13,9 @@ class EditorViewModel {
     var openDocuments: [EditorDocument] = []
     var currentDocumentID: UUID?
 
+    /// Workspace-level diagnostics store — single source of truth cho tất cả file.
+    let workspaceStore = WorkspaceDiagnosticsStore()
+
     var currentDocument: EditorDocument? {
         openDocuments.first(where: { $0.id == currentDocumentID })
     }
@@ -43,9 +46,15 @@ class EditorViewModel {
             scheduleLSPSync(for: doc.url)
             scheduleBiomeCheck(for: doc.url)
 
-            // Re-fetch symbols on text change (debounced implicitly in some cases, or we can just call it)
-            if let root = appViewModelProjectRoot() {
-                doc.fetchSymbolsIfSupported(projectRoot: root)
+            // Re-fetch symbols with debounce to avoid firing an LSP request on every keystroke.
+            let docRef = doc
+            symbolsTask?.cancel()
+            symbolsTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(800))
+                guard !Task.isCancelled, let self else { return }
+                if let root = self.appViewModelProjectRoot() {
+                    docRef.fetchSymbolsIfSupported(projectRoot: root)
+                }
             }
         }
     }
@@ -64,6 +73,7 @@ class EditorViewModel {
 
     /// Debounce Biome diagnostics so we don't spawn a formatter/linter process per keystroke.
     private var biomeCheckTask: Task<Void, Never>?
+    private var symbolsTask: Task<Void, Never>?
     private func scheduleBiomeCheck(for url: URL) {
         biomeCheckTask?.cancel()
         biomeCheckTask = Task { [weak self] in
@@ -91,8 +101,15 @@ class EditorViewModel {
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 docRef.biomeDiagnostics = diags
+                self.workspaceStore.update(url: url, diagnostics: diags)
             }
         }
+    }
+
+    /// Bắt đầu background index toàn bộ workspace bằng Biome.
+    func startWorkspaceIndex(root: URL) {
+        let formatConfig = settingsStore.settings.format.default_style
+        workspaceStore.startIndex(root: root, formatConfig: formatConfig)
     }
     
     // Helper to get project root since EditorViewModel might not store it directly
@@ -307,10 +324,19 @@ class EditorViewModel {
         ])
     }
 
+    private static let lspSupportedExtensions: Set<String> = ["js", "jsx", "ts", "tsx", "mjs", "cjs"]
+
     private func handleDiagnostics(_ params: [String: Any]) {
         guard let uriString = params["uri"] as? String,
               let url = URL(string: uriString),
               let diagArray = params["diagnostics"] as? [[String: Any]] else { return }
+
+        // Bỏ qua diagnostics cho file không phải JS/TS (vd: bun.lock, package.json, ...)
+        let ext = url.pathExtension.lowercased()
+        guard Self.lspSupportedExtensions.contains(ext) else {
+            print("🌐 [LSP] Skipping diagnostics for unsupported file: \(url.lastPathComponent)")
+            return
+        }
 
         print("🌐 [LSP] Received \(diagArray.count) diagnostics for: \(url.lastPathComponent)")
 
@@ -326,31 +352,77 @@ class EditorViewModel {
             }
         }
 
-        let parsed: [CodeX.Diagnostic] = diagArray.compactMap { dict in
-            guard let rangeDict = dict["range"] as? [String: Any],
-                  let startDict = rangeDict["start"] as? [String: Any],
-                  let endDict   = rangeDict["end"]   as? [String: Any],
-                  let sLine = startDict["line"]      as? Int,
-                  let sChar = startDict["character"] as? Int,
-                  let eLine = endDict["line"]        as? Int,
-                  let eChar = endDict["character"]   as? Int,
-                  let message = dict["message"]      as? String else { return nil }
+        // Cap to avoid freezing the UI with excessively large diagnostic sets (e.g. bun.lock)
+        let cappedArray = diagArray.count > 500 ? Array(diagArray.prefix(500)) : diagArray
+        let docText = doc.text
 
-            let severityInt = dict["severity"] as? Int ?? 1
-            let severity: DiagnosticSeverity
-            switch severityInt {
-            case 1: severity = .error
-            case 2: severity = .warning
-            case 3: severity = .info
-            case 4: severity = .hint
-            default: severity = .error
+        // Process on background thread to avoid blocking the main/UI thread.
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+
+            // Pre-compute line start offsets once for the whole document.
+            let ns = docText as NSString
+            let fullLength = ns.length
+            var lineOffsets: [Int] = []
+            lineOffsets.reserveCapacity(256)
+            lineOffsets.append(0)
+            for i in 0..<fullLength {
+                if ns.character(at: i) == 10 { // '\n'
+                    lineOffsets.append(i + 1)
+                }
             }
 
-            let range = doc.nsRange(fromLSPRange: (start: (sLine, sChar), end: (eLine, eChar)))
-            return CodeX.Diagnostic(range: range, severity: severity, message: message)
-        }
+            func offsetFor(line: Int, char: Int) -> Int {
+                guard line < lineOffsets.count else { return fullLength }
+                return min(lineOffsets[line] + char, fullLength)
+            }
 
-        doc.lspDiagnostics = parsed
+            let parsed: [CodeX.Diagnostic] = cappedArray.compactMap { dict in
+                guard let rangeDict = dict["range"] as? [String: Any],
+                      let startDict = rangeDict["start"] as? [String: Any],
+                      let endDict   = rangeDict["end"]   as? [String: Any],
+                      let sLine = startDict["line"]      as? Int,
+                      let sChar = startDict["character"] as? Int,
+                      let eLine = endDict["line"]        as? Int,
+                      let eChar = endDict["character"]   as? Int,
+                      let message = dict["message"]      as? String else { return nil }
+
+                let severityInt = dict["severity"] as? Int ?? 1
+                let severity: DiagnosticSeverity
+                switch severityInt {
+                case 1: severity = .error
+                case 2: severity = .warning
+                case 3: severity = .info
+                case 4: severity = .hint
+                default: severity = .error
+                }
+
+                // Parse source and code for tooltip labelling.
+                let lspSource = dict["source"] as? String
+                let codeRaw   = dict["code"]
+                let codeStr: String? = (codeRaw as? Int).map { "\($0)" } ?? (codeRaw as? String)
+                let source: DiagnosticSource
+                switch lspSource?.lowercased() {
+                case "typescript", "ts":
+                    source = .typescript(code: (codeRaw as? Int) ?? codeStr.flatMap { Int($0) })
+                case "eslint":
+                    source = .eslint(rule: codeStr)
+                case .some(let s):
+                    source = .lsp(source: s, code: codeStr)
+                case .none:
+                    source = .unknown
+                }
+
+                let start = offsetFor(line: sLine, char: sChar)
+                let end   = offsetFor(line: eLine, char: eChar)
+                let range = NSRange(location: start, length: max(0, end - start))
+                return CodeX.Diagnostic(range: range, severity: severity, message: message, source: source)
+            }
+
+            await MainActor.run {
+                doc.lspDiagnostics = parsed
+            }
+        }
     }
 
     private func lspVersion(for url: URL) -> Int? {

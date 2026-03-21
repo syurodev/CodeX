@@ -21,7 +21,7 @@ struct CodeXTests {
         )
 
         #expect(config.executablePath == "/usr/bin/env")
-        #expect(config.arguments == ["npx", "@zed-industries/claude-code-acp@0.16.1"])
+        #expect(config.arguments == ["npx", "@zed-industries/claude-agent-acp@0.22.2"])
         #expect(config.workingDirectory == "/tmp/MyProject")
     }
 
@@ -46,13 +46,13 @@ struct CodeXTests {
                 workingDirectory: nil,
                 environment: [
                     "CODEX_CLAUDE_ACP_PATH": "/Users/test/.nvm/versions/node/v22/bin/npx",
-                    "CODEX_CLAUDE_ACP_ARGS": "@zed-industries/claude-code-acp@0.16.1"
+                    "CODEX_CLAUDE_ACP_ARGS": "@zed-industries/claude-agent-acp@0.22.2"
                 ]
             )
         )
 
         #expect(config.executablePath == "/Users/test/.nvm/versions/node/v22/bin/npx")
-        #expect(config.arguments == ["@zed-industries/claude-code-acp@0.16.1"])
+        #expect(config.arguments == ["@zed-industries/claude-agent-acp@0.22.2"])
     }
 
     @Test func claudeInitializationOptionsAlwaysIncludeClientVersion() async throws {

@@ -67,7 +67,8 @@ final class ACPClientDelegateBridge: ClientDelegate, @unchecked Sendable {
             message: request.message,
             options: request.options?.map { ACPClientPermissionOption(id: $0.optionId, kind: $0.kind, name: $0.name) } ?? [],
             sessionID: request.sessionId?.value,
-            toolCallID: request.toolCall?.toolCallId
+            toolCallID: request.toolCall?.toolCallId,
+            toolCallTitle: request.toolCall?.title
         )
 
         switch try await permissionHandler(bridgedRequest) {

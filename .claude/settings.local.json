@@ -37,7 +37,16 @@
       "Bash(gh api:*)",
       "Bash(curl:*)",
       "WebFetch(domain:zed.dev)",
-      "WebFetch(domain:docs.github.com)"
+      "WebFetch(domain:docs.github.com)",
+      "Bash(find /Users/syuro/Workspace/PERSONAL/CodeX -type f -name *ACP* -o -name *acp*)",
+      "Bash(xcodebuild -scheme CodeX -destination \"platform=macOS\" build)",
+      "Bash(grep -r \"MACOSX_DEPLOYMENT_TARGET\\\\|\\\\.macOS\\(\" /Users/syuro/Workspace/PERSONAL/CodeX --include=*.xcconfig --include=*.pbxproj --include=Package.swift)",
+      "Bash(grep -r \"TextDidChangeNotification\\\\|com.CodeEdit.TextView.TextDidChangeNotification\" /Users/syuro/Workspace/PERSONAL/CodeX/Packages/CodeEditSourceEditor/Sources --include=*.swift)",
+      "Bash(find /Users/syuro/Workspace/PERSONAL/CodeX/Packages/CodeEditSourceEditor/.build/index-build/checkouts/CodeEditTextView -name *.swift)",
+      "Bash(grep -r \"onTextChange\\\\|documentTextChanged\" /Users/syuro/Workspace/PERSONAL/CodeX/CodeX --include=*.swift)",
+      "Bash(find /Users/syuro/Workspace/PERSONAL/CodeX/CodeX -type f -name \"*.swift\" -exec grep -l \"\\\\.count\\\\|summary\\\\|status.*bar\" {})",
+      "Bash(find /Users/syuro/Workspace/PERSONAL/CodeX/CodeX/Views/Toolbar -type f -name \"*.swift\" -exec wc -l {} +)",
+      "Bash(wc -l /Users/syuro/Workspace/PERSONAL/CodeX/CodeX/Views/**/*.swift)"
     ]
   }
 }

@@ -13,19 +13,22 @@ struct AgentProvider: Identifiable, Hashable {
     let displayName: String
     let subtitle: String
     let systemImage: String
+    let iconImageName: String
 
     static let claudeCode = AgentProvider(
         id: .claudeCode,
         displayName: "Claude Code",
         subtitle: "ACP runtime via claude-agent-acp adapter",
-        systemImage: "sparkles.rectangle.stack"
+        systemImage: "sparkles.rectangle.stack",
+        iconImageName: "claude-icon"
     )
 
     static let githubCopilot = AgentProvider(
         id: .githubCopilot,
         displayName: "GitHub Copilot",
         subtitle: "Copilot CLI in ACP server mode",
-        systemImage: "bolt.horizontal.circle"
+        systemImage: "bolt.horizontal.circle",
+        iconImageName: "copilot-icon"
     )
 }
 
@@ -51,7 +54,7 @@ extension AgentProvider {
                     .split(separator: " ")
                     .map(String.init) ?? []
             } else {
-                let package = environment["CODEX_CLAUDE_ACP_PACKAGE"] ?? "@zed-industries/claude-code-acp@0.16.1"
+                let package = environment["CODEX_CLAUDE_ACP_PACKAGE"] ?? "@zed-industries/claude-agent-acp@0.22.2"
                 arguments = [package]
             }
 

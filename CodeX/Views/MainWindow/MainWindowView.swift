@@ -46,10 +46,10 @@ struct MainWindowView: View {
                     CodeEditorView(
                         viewModel: appVM.editorViewModel,
                         topContentInset: appVM.editorViewModel.openDocuments.isEmpty ? 0 : EditorTabBarView.height + EditorJumpBarView.height,
-                        bottomContentInset: appVM.isTerminalPanelPresented ? 0 : StatusBarView.height
+                        bottomContentInset: appVM.activeBottomPanel != nil ? 0 : StatusBarView.height
                     )
                     .overlay(alignment: .bottom) {
-                        if !appVM.isTerminalPanelPresented {
+                        if appVM.activeBottomPanel == nil {
                             StatusBarView(
                                 document: appVM.editorViewModel.currentDocument,
                                 cursorPosition: appVM.editorViewModel.cursorPosition
@@ -72,21 +72,38 @@ struct MainWindowView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                if appVM.isTerminalPanelPresented {
-                    TerminalPanelView(
-                        viewModel: appVM.terminalPanelViewModel,
+                // TerminalPanelView luôn ở trong view hierarchy để sessions không bị kill.
+                // Dùng frame(height: 0).clipped() khi ẩn thay vì remove khỏi hierarchy.
+                TerminalPanelView(
+                    viewModel: appVM.terminalPanelViewModel,
+                    height: $appVM.terminalPanelHeight,
+                    runViewModel: appVM.projectRunViewModel,
+                    onNewSession: {
+                        appVM.terminalPanelViewModel.newSession(workingDirectory: appVM.project?.rootURL)
+                    },
+                    onClose: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            appVM.activeBottomPanel = nil
+                        }
+                    }
+                )
+                .frame(height: appVM.activeBottomPanel == .terminal ? appVM.terminalPanelHeight : 0)
+                .clipped()
+                .allowsHitTesting(appVM.activeBottomPanel == .terminal)
+
+                if appVM.activeBottomPanel == .diagnostics {
+                    DiagnosticsPanelView(
+                        store: appVM.editorViewModel.workspaceStore,
                         height: $appVM.terminalPanelHeight,
-                        runViewModel: appVM.projectRunViewModel,
-                        onNewSession: {
-                            appVM.terminalPanelViewModel.newSession(workingDirectory: appVM.project?.rootURL)
-                        },
                         onClose: {
                             withAnimation(.easeInOut(duration: 0.2)) {
-                                appVM.isTerminalPanelPresented = false
+                                appVM.activeBottomPanel = nil
                             }
                         }
                     )
+                }
 
+                if appVM.activeBottomPanel != nil {
                     StatusBarView(
                         document: appVM.editorViewModel.currentDocument,
                         cursorPosition: appVM.editorViewModel.cursorPosition

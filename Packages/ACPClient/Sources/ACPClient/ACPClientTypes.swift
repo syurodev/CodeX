@@ -134,12 +134,14 @@ public struct ACPClientPermissionRequest: Sendable, Equatable {
     public let options: [ACPClientPermissionOption]
     public let sessionID: String?
     public let toolCallID: String?
+    public let toolCallTitle: String?
 
-    public init(message: String?, options: [ACPClientPermissionOption], sessionID: String?, toolCallID: String?) {
+    public init(message: String?, options: [ACPClientPermissionOption], sessionID: String?, toolCallID: String?, toolCallTitle: String? = nil) {
         self.message = message
         self.options = options
         self.sessionID = sessionID
         self.toolCallID = toolCallID
+        self.toolCallTitle = toolCallTitle
     }
 }
 
@@ -162,13 +164,27 @@ public struct ACPClientToolCallEvent: Sendable, Equatable {
     public let title: String?
     public let kind: String?
     public let status: String?
+    public let command: String?
+    public let output: String?
 
-    public init(sessionID: String, toolCallID: String, title: String?, kind: String?, status: String?) {
+    public init(sessionID: String, toolCallID: String, title: String?, kind: String?, status: String?, command: String? = nil, output: String? = nil) {
         self.sessionID = sessionID
         self.toolCallID = toolCallID
         self.title = title
         self.kind = kind
         self.status = status
+        self.command = command
+        self.output = output
+    }
+}
+
+public struct ACPClientAvailableCommand: Sendable, Equatable {
+    public let name: String
+    public let description: String
+
+    public init(name: String, description: String) {
+        self.name = name
+        self.description = description
     }
 }
 
@@ -178,7 +194,7 @@ public enum ACPClientSessionEvent: Sendable, Equatable {
     case toolCall(ACPClientToolCallEvent)
     case toolCallUpdate(ACPClientToolCallEvent)
     case plan(sessionID: String, entries: [String])
-    case availableCommands(sessionID: String, names: [String])
+    case availableCommands(sessionID: String, commands: [ACPClientAvailableCommand])
     case currentMode(sessionID: String, modeID: String)
     case configOptions(sessionID: String, names: [String])
 }

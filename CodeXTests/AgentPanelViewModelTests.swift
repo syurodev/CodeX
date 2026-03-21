@@ -15,7 +15,7 @@ struct AgentPanelViewModelTests {
                 MockAgentRuntimeTransport(
                     handshake: .init(
                         protocolVersion: 1,
-                        agentName: "claude-code-acp",
+                        agentName: "claude-agent-acp",
                         agentTitle: "Claude Code",
                         agentVersion: "0.16.1",
                         authMethodNames: []
@@ -49,7 +49,7 @@ struct AgentPanelViewModelTests {
                 MockAgentRuntimeTransport(
                     handshake: .init(
                         protocolVersion: 1,
-                        agentName: "claude-code-acp",
+                        agentName: "claude-agent-acp",
                         agentTitle: "Claude Code",
                         agentVersion: "0.16.1",
                         authMethodNames: []
@@ -170,7 +170,7 @@ struct AgentPanelViewModelTests {
                 MockAgentRuntimeTransport(
                     handshake: .init(
                         protocolVersion: 1,
-                        agentName: "claude-code-acp",
+                        agentName: "claude-agent-acp",
                         agentTitle: "Claude Code",
                         agentVersion: "0.16.1",
                         authMethodNames: []
@@ -432,7 +432,7 @@ struct AgentPanelViewModelTests {
                     MockAgentRuntimeTransport(
                         handshake: .init(
                             protocolVersion: 1,
-                            agentName: "claude-code-acp",
+                            agentName: "claude-agent-acp",
                             agentTitle: "Claude Code",
                             agentVersion: "0.16.1",
                             authMethodNames: []

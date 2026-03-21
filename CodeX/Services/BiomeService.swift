@@ -99,6 +99,7 @@ class BiomeService {
     private struct BiomeDiagEntry: Decodable {
         let severity: String
         let description: String
+        let category: String?
         let location: BiomeLoc?
         struct BiomeLoc: Decodable {
             let span: [Int]?
@@ -141,7 +142,13 @@ class BiomeService {
             try process.run()
             try inputPipe.fileHandleForWriting.write(contentsOf: Data(text.utf8))
             inputPipe.fileHandleForWriting.closeFile()
-            process.waitUntilExit()
+            // Use a DispatchQueue thread to block-wait so we don't starve the Swift cooperative thread pool.
+            await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async {
+                    process.waitUntilExit()
+                    continuation.resume()
+                }
+            }
             guard process.terminationStatus != 0 else { return [] } // 0 = already formatted
             let formatted = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? text
             return formatDiagnostics(original: text, formatted: formatted)
@@ -164,7 +171,8 @@ class BiomeService {
                 let range = NSRange(location: offset, length: max(1, lineLen))
                 let expected = fmtLine.map { "Expected: \($0.trimmingCharacters(in: .whitespaces))" } ?? "Line should be removed"
                 diags.append(Diagnostic(range: range, severity: .warning,
-                                        message: "Biome: formatting issue. \(expected)"))
+                                        message: "Formatting issue. \(expected)",
+                                        source: .biomeFormat))
             }
             offset += lineLen + 1 // +1 for \n
         }
@@ -189,7 +197,13 @@ class BiomeService {
             try process.run()
             try inputPipe.fileHandleForWriting.write(contentsOf: Data(text.utf8))
             inputPipe.fileHandleForWriting.closeFile()
-            process.waitUntilExit()
+            // Use a DispatchQueue thread to block-wait so we don't starve the Swift cooperative thread pool.
+            await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async {
+                    process.waitUntilExit()
+                    continuation.resume()
+                }
+            }
             let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
             return parseLintJSON(data, sourceText: text)
         } catch { return [] }
@@ -226,8 +240,142 @@ class BiomeService {
             default:               severity = .hint
             }
 
-            return Diagnostic(range: range, severity: severity, message: entry.description)
+            // "lint/suspicious/noDoubleEquals" → rule = "noDoubleEquals"
+            let source: DiagnosticSource
+            if let category = entry.category, !category.isEmpty {
+                let rule = category.split(separator: "/").last.map(String.init) ?? category
+                source = .biomeLint(rule: rule)
+            } else {
+                source = .biomeLint(rule: "lint")
+            }
+
+            return Diagnostic(range: range, severity: severity, message: entry.description, source: source)
         }
+    }
+
+    // MARK: - Workspace check
+
+    // JSON models cho workspace check (multi-file output)
+    private struct BiomeCheckOutput: Decodable {
+        let diagnostics: [BiomeCheckDiagEntry]
+    }
+    private struct BiomeCheckDiagEntry: Decodable {
+        let severity: String
+        let description: String
+        let category: String?
+        let location: BiomeCheckLoc?
+        struct BiomeCheckLoc: Decodable {
+            let path: BiomeCheckPath?
+            let span: [Int]?
+            struct BiomeCheckPath: Decodable {
+                let file: String?
+            }
+        }
+    }
+
+    /// Chạy `biome lint --reporter json <root>` trên toàn bộ workspace.
+    /// Dùng `lint` thay vì `check` để đảm bảo cùng JSON format với per-file check.
+    /// Trả về map `fileURL → [Diagnostic]` cho tất cả file có lỗi.
+    func checkWorkspace(root: URL, formatConfig: DefaultFormatConfig = DefaultFormatConfig()) async -> [URL: [Diagnostic]] {
+        guard let execPath = biomePath() else { return [:] }
+        _ = defaultConfigPath(for: formatConfig)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: execPath)
+        process.arguments = ["lint", "--reporter", "json", root.path]
+        process.currentDirectoryURL = root
+
+        let outputPipe = Pipe()
+        let errorPipe  = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError  = errorPipe
+
+        do {
+            try process.run()
+            await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async {
+                    process.waitUntilExit()
+                    continuation.resume()
+                }
+            }
+            // Biome viết JSON ra stdout; stderr chứa progress/human text
+            let data    = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            let errData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let exitCode = process.terminationStatus
+            print("🧹 [BiomeWorkspace] exit=\(exitCode) stdout=\(data.count)B stderr=\(errData.count)B")
+
+            if data.isEmpty && !errData.isEmpty {
+                // Fallback: thử stderr
+                return parseWorkspaceJSON(errData, root: root)
+            }
+            return parseWorkspaceJSON(data, root: root)
+        } catch { return [:] }
+    }
+
+    private func parseWorkspaceJSON(_ data: Data, root: URL) -> [URL: [Diagnostic]] {
+        guard !data.isEmpty,
+              let output = try? JSONDecoder().decode(BiomeCheckOutput.self, from: data) else { return [:] }
+
+        // Group entries by file path
+        var grouped: [String: [BiomeCheckDiagEntry]] = [:]
+        for entry in output.diagnostics {
+            guard let filePath = entry.location?.path?.file else { continue }
+            grouped[filePath, default: []].append(entry)
+        }
+
+        var result: [URL: [Diagnostic]] = [:]
+
+        for (filePath, entries) in grouped {
+            let fileURL = filePath.hasPrefix("/")
+                ? URL(fileURLWithPath: filePath)
+                : root.appendingPathComponent(filePath)
+
+            guard let content = try? String(contentsOf: fileURL, encoding: .utf8) else { continue }
+
+            let utf8  = content.utf8
+            let utf16 = content.utf16
+
+            let diags: [Diagnostic] = entries.compactMap { entry in
+                guard let span = entry.location?.span, span.count >= 2 else { return nil }
+                let startByte = span[0]
+                let endByte   = max(span[1], startByte + 1)
+                guard startByte < utf8.count else { return nil }
+
+                let clampedEnd = min(endByte, utf8.count)
+                guard let startIdx = utf8.index(utf8.startIndex, offsetBy: startByte, limitedBy: utf8.endIndex),
+                      let endIdx   = utf8.index(utf8.startIndex, offsetBy: clampedEnd, limitedBy: utf8.endIndex),
+                      let startU16 = startIdx.samePosition(in: utf16),
+                      let endU16   = endIdx.samePosition(in: utf16) else { return nil }
+
+                let loc  = utf16.distance(from: utf16.startIndex, to: startU16)
+                let len  = utf16.distance(from: startU16, to: endU16)
+                let range = NSRange(location: loc, length: max(1, len))
+
+                let severity: DiagnosticSeverity
+                switch entry.severity.lowercased() {
+                case "fatal", "error": severity = .error
+                case "warning":        severity = .warning
+                case "information":    severity = .info
+                default:               severity = .hint
+                }
+
+                let source: DiagnosticSource
+                if let category = entry.category, !category.isEmpty {
+                    let rule = category.split(separator: "/").last.map(String.init) ?? category
+                    source = category.hasPrefix("format") ? .biomeFormat : .biomeLint(rule: rule)
+                } else {
+                    source = .biomeLint(rule: "lint")
+                }
+
+                return Diagnostic(range: range, severity: severity, message: entry.description, source: source)
+            }
+
+            if !diags.isEmpty {
+                result[fileURL] = diags
+            }
+        }
+
+        return result
     }
 
     /// Kept for backward-compat (formatter still uses this).

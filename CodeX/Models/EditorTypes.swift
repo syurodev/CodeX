@@ -48,15 +48,26 @@ public enum DiagnosticSeverity: Equatable {
     case hint
 }
 
+public enum DiagnosticSource: Equatable, Hashable {
+    case typescript(code: Int?)
+    case eslint(rule: String?)
+    case biomeLint(rule: String)
+    case biomeFormat
+    case lsp(source: String, code: String?)
+    case unknown
+}
+
 public struct Diagnostic: Equatable {
     public var range: NSRange
     public var severity: DiagnosticSeverity
     public var message: String
+    public var source: DiagnosticSource
 
-    public init(range: NSRange, severity: DiagnosticSeverity, message: String) {
+    public init(range: NSRange, severity: DiagnosticSeverity, message: String, source: DiagnosticSource = .unknown) {
         self.range = range
         self.severity = severity
         self.message = message
+        self.source = source
     }
 }
 

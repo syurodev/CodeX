@@ -12,6 +12,10 @@ struct MainWindowToolbarContent: ToolbarContent {
             ToolbarRunView(appViewModel: appViewModel)
         }
 
+        ToolbarItem(placement: .primaryAction) {
+            ToolbarDiagnosticsButton(appViewModel: appViewModel)
+        }
+
         if !appViewModel.isAgentInspectorPresented {
             ToolbarItem(placement: .primaryAction) {
                 ToolbarAgentPanelButton(appViewModel: appViewModel)
@@ -143,5 +147,48 @@ private struct ToolbarAgentPanelButton: View {
         .foregroundColor(appViewModel.isAgentInspectorPresented ? .accentColor : .primary)
         .help(appViewModel.isAgentInspectorPresented ? "Hide Agent panel" : "Show Agent panel")
         .accessibilityLabel("Toggle Agent panel")
+    }
+}
+
+private struct ToolbarDiagnosticsButton: View {
+    let appViewModel: AppViewModel
+
+    private var store: WorkspaceDiagnosticsStore { appViewModel.editorViewModel.workspaceStore }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if store.isIndexing {
+                ProgressView()
+                    .controlSize(.mini)
+                    .help("Indexing workspace…")
+            }
+
+            if store.totalErrors > 0 || store.totalWarnings > 0 {
+                if store.totalErrors > 0 {
+                    HStack(spacing: 3) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.red)
+                        Text("\(store.totalErrors)")
+                    }
+                }
+                if store.totalWarnings > 0 {
+                    HStack(spacing: 3) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.yellow)
+                        Text("\(store.totalWarnings)")
+                    }
+                }
+            } else if !store.isIndexing {
+                HStack(spacing: 3) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Text("0")
+                }
+            }
+        }
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(.primary)
+        .help("Workspace diagnostics")
+        .padding(.horizontal, 4)
     }
 }

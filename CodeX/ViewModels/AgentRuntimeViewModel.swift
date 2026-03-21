@@ -74,6 +74,9 @@ struct AgentActivity: Identifiable, Hashable {
     let kind: AgentActivityKind
     var title: String
     var detail: String?
+    var command: String?
+    var output: String?
+    var toolKind: String?
     var status: AgentActivityStatus
     let createdAt: Date
     var updatedAt: Date
@@ -83,6 +86,9 @@ struct AgentActivity: Identifiable, Hashable {
         kind: AgentActivityKind,
         title: String,
         detail: String? = nil,
+        command: String? = nil,
+        output: String? = nil,
+        toolKind: String? = nil,
         status: AgentActivityStatus,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -91,6 +97,9 @@ struct AgentActivity: Identifiable, Hashable {
         self.kind = kind
         self.title = title
         self.detail = detail
+        self.command = command
+        self.output = output
+        self.toolKind = toolKind
         self.status = status
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -200,10 +209,14 @@ protocol AgentRuntimeTransporting: Sendable {
     func terminate() async
 }
 
-typealias AgentRuntimeTransportFactory = @MainActor @Sendable () -> any AgentRuntimeTransporting
+typealias AgentRuntimeTransportFactory = @MainActor @Sendable (@escaping ACPClientPermissionHandler) -> any AgentRuntimeTransporting
 
 actor LiveAgentRuntimeTransport: AgentRuntimeTransporting {
-    private let runtime = ACPClientRuntime()
+    private let runtime: ACPClientRuntime
+
+    init(permissionHandler: ACPClientPermissionHandler? = nil) {
+        runtime = ACPClientRuntime(permissionHandler: permissionHandler)
+    }
 
     func launch(_ configuration: ACPClientLaunchConfiguration) async throws {
         try await runtime.launch(configuration)
@@ -238,6 +251,14 @@ actor LiveAgentRuntimeTransport: AgentRuntimeTransporting {
     }
 }
 
+struct AgentPermissionRequest: Identifiable {
+    let id: UUID
+    let message: String?
+    let toolCallTitle: String?
+    let options: [ACPClientPermissionOption]
+    let resolve: (ACPClientPermissionDecision) -> Void
+}
+
 private struct AgentRuntimeConnection {
     let transport: any AgentRuntimeTransporting
     let session: ACPClientSession
@@ -256,6 +277,10 @@ final class AgentRuntimeViewModel: Identifiable {
     var activities: [AgentActivity]
     var lastError: String?
     var requiresAuthentication = false
+    var pendingPermissionRequests: [AgentPermissionRequest] = []
+    var serverCommands: [AgentSlashCommand] = []
+
+    var slashCommands: [AgentSlashCommand] { serverCommands }
 
     private let transportFactory: AgentRuntimeTransportFactory
     private var transport: (any AgentRuntimeTransporting)?
@@ -270,7 +295,7 @@ final class AgentRuntimeViewModel: Identifiable {
         provider: AgentProvider,
         title: String,
         workingDirectory: URL?,
-        transportFactory: @escaping AgentRuntimeTransportFactory = { LiveAgentRuntimeTransport() }
+        transportFactory: @escaping AgentRuntimeTransportFactory = { handler in LiveAgentRuntimeTransport(permissionHandler: handler) }
     ) {
         self.provider = provider
         self.title = title
@@ -377,6 +402,8 @@ final class AgentRuntimeViewModel: Identifiable {
     func stopResponding() {
         guard state == .busy, let transport, let session else { return }
 
+        cancelPendingPermissions()
+
         Task { [transport, sessionID = session.id, weak self] in
             do {
                 try await transport.cancelPrompt(sessionID: sessionID)
@@ -386,6 +413,12 @@ final class AgentRuntimeViewModel: Identifiable {
                 }
             }
         }
+    }
+
+    private func cancelPendingPermissions() {
+        let pending = pendingPermissionRequests
+        pendingPermissionRequests.removeAll()
+        for req in pending { req.resolve(.cancel) }
     }
 
     func restart() {
@@ -482,7 +515,7 @@ final class AgentRuntimeViewModel: Identifiable {
             throw AgentRuntimeError.unsupportedProvider(provider.displayName)
         }
 
-        let transport = transportFactory()
+        let transport = transportFactory(makePermissionHandler())
         self.transport = transport
         state = .starting
 
@@ -616,9 +649,10 @@ final class AgentRuntimeViewModel: Identifiable {
                 detail: entries.joined(separator: " • "),
                 status: .info
             )
-        case let .availableCommands(sessionID, names):
-            guard sessionID == expectedSessionID, !names.isEmpty else { return }
-            logDebug("Available commands update | sessionID=\(sessionID) | count=\(names.count)")
+        case let .availableCommands(sessionID, commands):
+            guard sessionID == expectedSessionID, !commands.isEmpty else { return }
+            logDebug("Available commands update | sessionID=\(sessionID) | count=\(commands.count)")
+            serverCommands = commands.map { AgentSlashCommand(name: $0.name, description: $0.description) }
         case let .currentMode(sessionID, modeID):
             guard sessionID == expectedSessionID else { return }
             logDebug("Current mode update | sessionID=\(sessionID) | mode=\(modeID)")
@@ -688,11 +722,15 @@ final class AgentRuntimeViewModel: Identifiable {
 
     private func upsertToolActivity(_ call: ACPClientToolCallEvent) {
         needsNewAssistantMessage = true
+        let existingTitle = activities.first(where: { $0.id == "tool-\(call.toolCallID)" })?.title
         upsertActivity(
             id: "tool-\(call.toolCallID)",
             kind: .tool,
-            title: call.title ?? humanize(call.kind) ?? shortToolFallback(call.toolCallID),
+            title: call.title ?? shortCommandTitle(call.command) ?? humanize(call.kind) ?? existingTitle ?? shortToolFallback(call.toolCallID),
             detail: toolActivityDetail(for: call),
+            command: call.command,
+            output: call.output,
+            toolKind: call.kind,
             status: activityStatus(for: call.status)
         )
     }
@@ -702,6 +740,9 @@ final class AgentRuntimeViewModel: Identifiable {
         kind: AgentActivityKind,
         title: String,
         detail: String?,
+        command: String? = nil,
+        output: String? = nil,
+        toolKind: String? = nil,
         status: AgentActivityStatus
     ) {
         let timestamp = Date()
@@ -709,6 +750,9 @@ final class AgentRuntimeViewModel: Identifiable {
         if let index = activities.firstIndex(where: { $0.id == id }) {
             activities[index].title = title
             activities[index].detail = detail
+            if command != nil { activities[index].command = command }
+            if output != nil { activities[index].output = output }
+            if toolKind != nil { activities[index].toolKind = toolKind }
             activities[index].status = status
             activities[index].updatedAt = timestamp
             return
@@ -720,6 +764,9 @@ final class AgentRuntimeViewModel: Identifiable {
                 kind: kind,
                 title: title,
                 detail: detail,
+                command: command,
+                output: output,
+                toolKind: toolKind,
                 status: status,
                 createdAt: timestamp,
                 updatedAt: timestamp
@@ -744,6 +791,7 @@ final class AgentRuntimeViewModel: Identifiable {
 
     private func resetActivities() {
         activities.removeAll()
+        cancelPendingPermissions()
     }
 
     private func activityStatus(for rawStatus: String?) -> AgentActivityStatus {
@@ -783,6 +831,40 @@ final class AgentRuntimeViewModel: Identifiable {
         return cleaned.prefix(1).uppercased() + cleaned.dropFirst()
     }
 
+    private func shortCommandTitle(_ command: String?) -> String? {
+        guard let command, !command.isEmpty else { return nil }
+
+        // Plain path (from rawInput.path for read-kind tools) — show just last component
+        if command.hasPrefix("/") || command.hasPrefix("~") {
+            let last = URL(fileURLWithPath: command).lastPathComponent
+            return last.isEmpty ? nil : last
+        }
+
+        // Strip leading "cd /path && " pattern
+        var cmd = command.trimmingCharacters(in: .whitespaces)
+        if let range = cmd.range(of: #"^cd\s+\S+\s*&&\s*"#, options: .regularExpression) {
+            cmd = String(cmd[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+        }
+
+        let tokens = cmd.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        guard let binary = tokens.first else { return nil }
+
+        // Find the last token that looks like a path (contains /)
+        if let pathToken = tokens.dropFirst().last(where: { $0.contains("/") }) {
+            let lastComponent = URL(fileURLWithPath: pathToken).lastPathComponent
+            if !lastComponent.isEmpty {
+                return "\(binary) \(lastComponent)"
+            }
+        }
+
+        // No path arg — use binary + first non-flag arg
+        if let firstArg = tokens.dropFirst().first(where: { !$0.hasPrefix("-") }) {
+            return "\(binary) \(firstArg)"
+        }
+
+        return binary
+    }
+
     private func shortToolFallback(_ toolCallID: String) -> String {
         "Tool \(toolCallID.prefix(6))"
     }
@@ -801,6 +883,32 @@ final class AgentRuntimeViewModel: Identifiable {
         requiresAuthentication = false
         lastError = nil
         Task { await bootstrapRuntimeIfNeeded(forceRestart: true) }
+    }
+
+    private func makePermissionHandler() -> ACPClientPermissionHandler {
+        { [weak self] request in
+            guard let self else { return .cancel }
+            return await withCheckedContinuation { continuation in
+                Task { @MainActor [weak self] in
+                    guard let self else {
+                        continuation.resume(returning: .cancel)
+                        return
+                    }
+                    let requestID = UUID()
+                    let permRequest = AgentPermissionRequest(
+                        id: requestID,
+                        message: request.message,
+                        toolCallTitle: request.toolCallTitle,
+                        options: request.options,
+                        resolve: { [weak self] decision in
+                            self?.pendingPermissionRequests.removeAll { $0.id == requestID }
+                            continuation.resume(returning: decision)
+                        }
+                    )
+                    self.pendingPermissionRequests.append(permRequest)
+                }
+            }
+        }
     }
 
     private func applyError(_ error: Error, prefix: String) {

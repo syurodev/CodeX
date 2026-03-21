@@ -1,3 +1,4 @@
+import ACPClient
 import Foundation
 import SwiftUI
 
@@ -138,6 +139,16 @@ private struct AgentRuntimeTabBarView: View {
     @Bindable var viewModel: AgentPanelViewModel
     @Environment(\.colorScheme) private var colorScheme
 
+    private func stateColor(_ state: AgentRuntimeState) -> Color {
+        switch state {
+        case .starting: return .orange
+        case .ready:    return .green
+        case .busy:     return .blue
+        case .stopped:  return .secondary
+        case .error:    return .red
+        }
+    }
+
     private func tabFill(isActive: Bool) -> Color {
         if isActive {
             return .accentColor.opacity(colorScheme == .dark ? 0.14 : 0.1)
@@ -158,38 +169,47 @@ private struct AgentRuntimeTabBarView: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 ForEach(viewModel.runtimes) { runtime in
-                    HStack(spacing: 6) {
-                        Button {
-                            viewModel.selectRuntime(id: runtime.id)
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: runtime.provider.systemImage)
-                                Text(runtime.title)
-                                    .lineLimit(1)
-                                AgentRuntimeStateBadge(state: runtime.state)
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
+                    let isActive = viewModel.activeRuntimeID == runtime.id
+                    Button {
+                        viewModel.selectRuntime(id: runtime.id)
+                    } label: {
+                        Image(runtime.provider.iconImageName)
+                            .resizable()
+                            .renderingMode(.template)
+                            .scaledToFit()
+                            .frame(width: 15, height: 15)
+                            .foregroundColor(colorScheme == .dark ? .white : .primary)
+                            .padding(6)
                             .background {
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(tabFill(isActive: viewModel.activeRuntimeID == runtime.id))
+                                    .fill(tabFill(isActive: isActive))
                                     .overlay {
                                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                            .strokeBorder(tabBorder(isActive: viewModel.activeRuntimeID == runtime.id))
+                                            .strokeBorder(tabBorder(isActive: isActive))
                                     }
                             }
-                        }
-                        .buttonStyle(.plain)
-
+                    }
+                    .buttonStyle(.plain)
+                    .help(runtime.title)
+                    .overlay(alignment: .bottomTrailing) {
+                        AgentStateDotView(state: runtime.state)
+                            .offset(x: 3, y: 3)
+                    }
+                    .overlay(alignment: .topTrailing) {
                         Button {
                             viewModel.closeRuntime(id: runtime.id)
                         } label: {
-                            Image(systemName: "xmark.circle.fill")
+                            Image(systemName: "xmark")
+                                .font(.system(size: 6.5, weight: .bold))
                                 .foregroundColor(.secondary)
+                                .frame(width: 13, height: 13)
+                                .background(Circle().fill(Color(nsColor: .windowBackgroundColor)))
+                                .overlay(Circle().strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5))
                         }
                         .buttonStyle(.plain)
+                        .offset(x: 4, y: -4)
                         .help("Close \(runtime.title)")
                     }
                 }
@@ -197,9 +217,10 @@ private struct AgentRuntimeTabBarView: View {
                 Button {
                     viewModel.showLauncher()
                 } label: {
-                    Label("New Agent", systemImage: "plus")
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
+                    Image(systemName: "plus")
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(width: 20, height: 20)
+                        .padding(7)
                         .background {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 .fill(tabFill(isActive: false))
@@ -210,9 +231,52 @@ private struct AgentRuntimeTabBarView: View {
                         }
                 }
                 .buttonStyle(.plain)
+                .help("New Agent")
             }
-            .padding(12)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 10)
         }
+    }
+}
+
+private struct AgentStateDotView: View {
+    let state: AgentRuntimeState
+    @State private var pinging = false
+
+    private var color: Color {
+        switch state {
+        case .starting: return .orange
+        case .ready:    return .green
+        case .busy:     return .blue
+        case .stopped:  return .secondary
+        case .error:    return .red
+        }
+    }
+
+    private var animates: Bool {
+        state == .starting || state == .busy
+    }
+
+    var body: some View {
+        ZStack {
+            if animates {
+                Circle()
+                    .fill(color.opacity(pinging ? 0 : 0.45))
+                    .frame(width: 7, height: 7)
+                    .scaleEffect(pinging ? 16.0 / 7.0 : 1)
+                    .animation(
+                        .easeOut(duration: 1.2).repeatForever(autoreverses: false),
+                        value: pinging
+                    )
+            }
+            Circle()
+                .fill(color)
+                .frame(width: 7, height: 7)
+                .background(Circle().fill(Color(nsColor: .windowBackgroundColor)).padding(-1.5))
+        }
+        .frame(width: 7, height: 7)
+        .onAppear { if animates { pinging = true } }
+        .onChange(of: state) { pinging = animates }
     }
 }
 
@@ -475,7 +539,9 @@ private struct AgentRuntimeContentView: View {
     @Bindable var viewModel: AgentRuntimeViewModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(CopilotService.self) private var copilotService
-    @State private var draft = ""
+    @State private var composerText: String = ""
+    @State private var activeAtQuery: String? = nil
+    private let composerRef = AgentRichComposerRef()
     @State private var isPinnedToBottom = true
     @State private var unreadTranscriptCount = 0
 
@@ -488,8 +554,12 @@ private struct AgentRuntimeContentView: View {
     }
 
     private var canSendDraft: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && viewModel.state != .busy
+        let hasText = !composerText
+            .replacingOccurrences(of: "\u{FFFC}", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+        let hasMentions = composerText.contains("\u{FFFC}")
+        return (hasText || hasMentions) && viewModel.state != .busy
     }
 
     private var transcriptSections: [AgentTranscriptSection] {
@@ -511,23 +581,70 @@ private struct AgentRuntimeContentView: View {
         transcriptBottomClearance + 12
     }
 
-    private var runtimeBackgroundColors: [Color] {
-        if colorScheme == .dark {
-            return [
-                .agentPanelBackground,
-                .agentPanelSecondaryBackground,
-                .agentPanelBackground.opacity(0.96)
-            ]
-        }
+    @State private var composerHeight: CGFloat = 72
+    @State private var fileMentionResults: [URL] = []
+    @State private var fileMentionTask: Task<Void, Never>? = nil
+    @State private var fileMentionSelectedIndex: Int = 0
 
-        return [
-            .agentPanelElevatedSurface,
-            .agentPanelSurface,
-            .agentPanelElevatedSurface
-        ]
+    private var commandSuggestions: [AgentSlashCommand] {
+        let trimmed = composerText
+            .replacingOccurrences(of: "\u{FFFC}", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("/") else { return [] }
+        let query = String(trimmed.dropFirst()).lowercased()
+        let commands = viewModel.slashCommands
+        if query.isEmpty { return commands }
+        return commands.filter {
+            $0.name.lowercased().hasPrefix(query) ||
+            $0.description.lowercased().contains(query)
+        }
     }
 
-    @State private var composerHeight: CGFloat = 72
+    private func selectCommand(_ command: AgentSlashCommand) {
+        composerRef.replaceAll(with: "/\(command.name) ")
+    }
+
+    private func searchFiles(query: String) {
+        fileMentionTask?.cancel()
+        guard let workDir = viewModel.workingDirectory else {
+            fileMentionResults = []
+            return
+        }
+        fileMentionTask = Task {
+            let results = await Task.detached(priority: .userInitiated) {
+                AgentFileSearcher.search(query: query, in: workDir)
+            }.value
+            guard !Task.isCancelled else { return }
+            fileMentionResults = results
+        }
+    }
+
+    private func selectFileMention(_ url: URL) {
+        composerRef.insertMention(url: url)
+        fileMentionResults = []
+        fileMentionTask?.cancel()
+    }
+
+    private func handlePickerKeyDown(_ event: NSEvent) -> Bool {
+        guard !fileMentionResults.isEmpty else { return false }
+        switch event.keyCode {
+        case 126: // up arrow
+            fileMentionSelectedIndex = max(0, fileMentionSelectedIndex - 1)
+            return true
+        case 125: // down arrow
+            fileMentionSelectedIndex = min(fileMentionResults.count - 1, fileMentionSelectedIndex + 1)
+            return true
+        case 36: // return
+            selectFileMention(fileMentionResults[fileMentionSelectedIndex])
+            return true
+        case 53: // escape
+            fileMentionResults = []
+            fileMentionTask?.cancel()
+            return true
+        default:
+            return false
+        }
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -540,13 +657,40 @@ private struct AgentRuntimeContentView: View {
                 copilotAuthBanner
             }
 
+            if !commandSuggestions.isEmpty {
+                AgentCommandPickerView(
+                    suggestions: commandSuggestions,
+                    onSelect: { command in selectCommand(command) }
+                )
+                .padding(.horizontal, composerOuterPadding)
+                .padding(.bottom, composerHeight + composerOuterPadding + 6)
+                .transition(.opacity.animation(.easeInOut(duration: 0.15)))
+            }
+
+            if !fileMentionResults.isEmpty {
+                AgentFileMentionPickerView(
+                    results: fileMentionResults,
+                    selectedIndex: fileMentionSelectedIndex,
+                    workingDirectory: viewModel.workingDirectory,
+                    onSelect: selectFileMention
+                )
+                .padding(.horizontal, composerOuterPadding)
+                .padding(.bottom, composerHeight + composerOuterPadding + 6)
+                .transition(.opacity.animation(.easeInOut(duration: 0.15)))
+            }
+
             AgentPromptComposerView(
-                text: $draft,
+                ref: composerRef,
                 state: viewModel.state,
                 statusText: viewModel.footerText,
+                agentName: viewModel.provider.displayName,
                 canSend: canSendDraft,
+                onTextChange: { composerText = $0 },
+                onAtQuery: { activeAtQuery = $0 },
+                onAtDismiss: { activeAtQuery = nil },
                 onSubmit: submitDraft,
-                onStopResponding: viewModel.stopResponding
+                onStopResponding: viewModel.stopResponding,
+                onPickerKeyDown: handlePickerKeyDown
             )
             .background {
                 GeometryReader { geo in
@@ -561,19 +705,27 @@ private struct AgentRuntimeContentView: View {
             }
             .padding(composerOuterPadding)
         }
-        .background {
-            LinearGradient(
-                colors: runtimeBackgroundColors,
-                startPoint: .top,
-                endPoint: .bottom
-            )
+        .onChange(of: activeAtQuery) { _, newQuery in
+            if let query = newQuery {
+                searchFiles(query: query)
+            } else {
+                fileMentionTask?.cancel()
+                if !fileMentionResults.isEmpty { fileMentionResults = [] }
+            }
+        }
+        .onChange(of: fileMentionResults) { _, _ in
+            fileMentionSelectedIndex = 0
         }
     }
 
     private func submitDraft() {
-        let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty, viewModel.state != .busy else { return }
-        draft = ""
+        guard canSendDraft else { return }
+        let prompt = composerRef.buildPrompt(workingDirectory: viewModel.workingDirectory)
+        guard !prompt.isEmpty else { return }
+        composerRef.clearAll()
+        composerText = ""
+        activeAtQuery = nil
+        fileMentionResults = []
         viewModel.submitPrompt(prompt)
     }
 
@@ -585,7 +737,9 @@ private struct AgentRuntimeContentView: View {
                     AgentTranscriptSectionsView(
                         sections: transcriptSections,
                         activeMessageID: activeAssistantMessageID,
-                        isBusy: viewModel.state == .busy
+                        isBusy: viewModel.state == .busy,
+                        pendingPermissionRequests: viewModel.pendingPermissionRequests,
+                        provider: viewModel.provider
                     )
                 }
 
@@ -597,7 +751,7 @@ private struct AgentRuntimeContentView: View {
         }
         .onAppear {
             isPinnedToBottom = true
-            scrollTranscriptToBottom(using: proxy, animated: false)
+            proxy.scrollTo(transcriptBottomID, anchor: .bottom)
         }
         .onChange(of: transcriptChangeToken) { _, _ in
             if isPinnedToBottom {
@@ -663,22 +817,17 @@ private struct AgentRuntimeContentView: View {
     }
 
     private func scrollTranscriptToBottom(using proxy: ScrollViewProxy, animated: Bool) {
-        let action = {
+        // animated=true  → user-triggered (jump to latest): smooth 0.22s
+        // animated=false → auto-follow during streaming: fast 0.14s (smooth but keeps up)
+        let animation: Animation = animated ? .easeOut(duration: 0.22) : .easeOut(duration: 0.5)
+        withAnimation(animation) {
             proxy.scrollTo(transcriptBottomID, anchor: .bottom)
         }
-
-        let performScroll = {
-            if animated {
-                withAnimation(.easeOut(duration: 0.18), action)
-            } else {
-                action()
-            }
-        }
-
-        performScroll()
-
+        // Second pass catches layout that settles after content change
         DispatchQueue.main.async {
-            performScroll()
+            withAnimation(animation) {
+                proxy.scrollTo(transcriptBottomID, anchor: .bottom)
+            }
         }
     }
 
@@ -752,13 +901,19 @@ private struct ComposerHeightPreferenceKey: PreferenceKey {
 }
 
 private struct AgentPromptComposerView: View {
-    @Binding var text: String
+    let ref: AgentRichComposerRef
     let state: AgentRuntimeState
     let statusText: String
+    let agentName: String
     let canSend: Bool
+    let onTextChange: (String) -> Void
+    let onAtQuery: (String) -> Void
+    let onAtDismiss: () -> Void
     let onSubmit: () -> Void
     let onStopResponding: () -> Void
+    var onPickerKeyDown: ((NSEvent) -> Bool)? = nil
     @Environment(\.colorScheme) private var colorScheme
+    @State private var richComposerHeight: CGFloat = 22
 
     private let cornerRadius: CGFloat = 24
 
@@ -771,26 +926,24 @@ private struct AgentPromptComposerView: View {
     }
 
     private var promptLabel: String {
-        switch state {
-        case .ready:
-            return "Message Codex"
-        case .starting, .busy, .stopped, .error:
-            return statusText
-        }
+        "Message \(agentName)"
     }
 
     var body: some View {
-        HStack(spacing: 12) {
-            TextField(
-                "",
-                text: $text,
-                prompt: Text(promptLabel)
-                    .foregroundStyle(Color.secondary.opacity(showsAnimatedStatus ? 0.92 : 0.72))
+        HStack(alignment: .bottom, spacing: 12) {
+            AgentRichComposerView(
+                ref: ref,
+                placeholder: promptLabel,
+                isEnabled: true,
+                contentHeight: $richComposerHeight,
+                onTextChange: onTextChange,
+                onAtQuery: onAtQuery,
+                onAtDismiss: onAtDismiss,
+                onSubmit: onSubmit,
+                onPickerKeyDown: onPickerKeyDown
             )
-            .textFieldStyle(.plain)
-            .font(.title3.weight(.semibold))
-            .foregroundStyle(.primary.opacity(showsAnimatedStatus ? 0.82 : 0.96))
-            .onSubmit(onSubmit)
+            .frame(height: richComposerHeight)
+            .opacity(showsAnimatedStatus ? 0.82 : 1.0)
 
             Button(action: showsStopButton ? onStopResponding : onSubmit) {
                 Circle()
@@ -862,15 +1015,175 @@ private struct LiquidGlassModifier: ViewModifier {
     }
 }
 
+// MARK: - Command Picker
+
+private struct AgentCommandPickerView: View {
+    let suggestions: [AgentSlashCommand]
+    let onSelect: (AgentSlashCommand) -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(suggestions.prefix(10)) { command in
+                    AgentCommandRowView(command: command, onSelect: onSelect)
+                }
+            }
+            .padding(6)
+        }
+        .frame(maxHeight: 260)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.agentPanelSeparator.opacity(0.4))
+        }
+        .shadow(color: .black.opacity(0.18), radius: 14, y: 4)
+    }
+}
+
+private struct AgentCommandRowView: View {
+    let command: AgentSlashCommand
+    let onSelect: (AgentSlashCommand) -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button { onSelect(command) } label: {
+            HStack(spacing: 8) {
+                Text("/\(command.name)")
+                    .font(.system(.subheadline, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                if !command.description.isEmpty {
+                    Text(command.description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background {
+                if isHovered {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.1))
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
+}
+
+private struct AgentFileMentionPickerView: View {
+    let results: [URL]
+    let selectedIndex: Int
+    let workingDirectory: URL?
+    let onSelect: (URL) -> Void
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(results.enumerated()), id: \.element.path) { index, url in
+                        AgentFileMentionRowView(
+                            url: url,
+                            workingDirectory: workingDirectory,
+                            isSelected: index == selectedIndex,
+                            onSelect: onSelect
+                        )
+                        .id(index)
+                    }
+                }
+                .padding(6)
+            }
+            .frame(maxHeight: 240)
+            .fixedSize(horizontal: false, vertical: true)
+            .onChange(of: selectedIndex) { _, newIndex in
+                withAnimation(.easeInOut(duration: 0.12)) {
+                    proxy.scrollTo(newIndex, anchor: .center)
+                }
+            }
+        }
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.agentPanelSeparator.opacity(0.4))
+        }
+        .shadow(color: .black.opacity(0.18), radius: 14, y: 4)
+    }
+}
+
+private struct AgentFileMentionRowView: View {
+    let url: URL
+    let workingDirectory: URL?
+    let isSelected: Bool
+    let onSelect: (URL) -> Void
+    @State private var isHovered = false
+
+    private var isDirectory: Bool {
+        (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+    }
+
+    private var displayName: String { url.lastPathComponent }
+
+    private var relativePath: String {
+        guard let workDir = workingDirectory,
+              url.path.hasPrefix(workDir.path) else { return url.lastPathComponent }
+        return String(url.path.dropFirst(workDir.path.count))
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    private var isHighlighted: Bool { isSelected || isHovered }
+
+    var body: some View {
+        Button { onSelect(url) } label: {
+            HStack(spacing: 8) {
+                Image(systemName: isDirectory ? "folder.fill" : "doc.text")
+                    .font(.system(size: 11))
+                    .foregroundStyle(isHighlighted ? Color.accentColor : .secondary)
+                    .frame(width: 14)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(displayName)
+                        .font(.system(.subheadline, design: .monospaced).weight(.semibold))
+                        .foregroundStyle(.primary)
+                    let rel = relativePath
+                    if rel != displayName {
+                        Text(rel)
+                            .font(.caption2)
+                            .foregroundStyle(isHighlighted ? Color.accentColor.opacity(0.8) : .secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background {
+                if isHighlighted {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(isSelected
+                            ? Color.accentColor.opacity(0.15)
+                            : Color.accentColor.opacity(0.08))
+                }
+            }
+            .animation(.easeInOut(duration: 0.1), value: isHighlighted)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
+}
+
 private struct AgentMessageRowView: View {
     let message: AgentMessage
     let isStreaming: Bool
+    let provider: AgentProvider
     @Environment(\.colorScheme) private var colorScheme
 
     private var roleLabel: String {
         switch message.role {
         case .assistant:
-            return "Assistant"
+            return provider.displayName
         case .user:
             return "You"
         case .system:
@@ -924,10 +1237,19 @@ private struct AgentMessageRowView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(roleTint.opacity(0.85))
-                    .frame(width: 7, height: 7)
+            HStack(spacing: 6) {
+                if message.role == .assistant {
+                    Image(provider.iconImageName)
+                        .resizable()
+                        .renderingMode(.template)
+                        .scaledToFit()
+                        .frame(width: 12, height: 12)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Circle()
+                        .fill(roleTint.opacity(0.85))
+                        .frame(width: 7, height: 7)
+                }
                 Text(roleLabel)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -954,103 +1276,133 @@ private struct AgentTranscriptSectionsView: View {
     let sections: [AgentTranscriptSection]
     let activeMessageID: AgentMessage.ID?
     let isBusy: Bool
+    let pendingPermissionRequests: [AgentPermissionRequest]
+    let provider: AgentProvider
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(sections) { section in
+            ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
                 switch section.content {
                 case let .message(message):
                     AgentMessageRowView(
                         message: message,
                         isStreaming: isBusy
                             && message.role == .assistant
-                            && message.id == activeMessageID
+                            && message.id == activeMessageID,
+                        provider: provider
                     )
+                    .transition(.opacity.animation(.easeIn(duration: 0.22)))
                 case let .activityGroup(activities):
-                    AgentActivityGroupView(activities: activities)
+                    let isLast = index == sections.indices.last
+                    AgentActivityListView(
+                        activities: activities,
+                        pendingPermissionRequests: isLast ? pendingPermissionRequests : []
+                    )
+                    .transition(.opacity.animation(.easeIn(duration: 0.22)))
                 }
             }
+
+            if case .message = sections.last?.content,
+               let request = pendingPermissionRequests.first {
+                AgentPermissionRequestView(request: request)
+                    .transition(.opacity.animation(.easeIn(duration: 0.22)))
+            }
         }
+        .animation(.default, value: sections.map(\.id))
     }
 }
 
-private struct AgentActivityGroupView: View {
+private struct AgentActivityListView: View {
     let activities: [AgentActivity]
-    @State private var isExpanded = false
+    let pendingPermissionRequests: [AgentPermissionRequest]
     @Environment(\.colorScheme) private var colorScheme
 
-    private var hasRunningActivity: Bool {
-        activities.contains { $0.status == .running }
-    }
-
-    private var summaryText: String {
-        if let running = activities.last(where: { $0.status == .running }) {
-            return running.title
+    private func permissionRequest(for activity: AgentActivity) -> AgentPermissionRequest? {
+        if let title = pendingPermissionRequests.first(where: { $0.toolCallTitle == activity.title }) {
+            return title
         }
-        let count = activities.count
-        return "\(count) tool\(count == 1 ? "" : "s") called"
-    }
-
-    private var summaryTint: Color {
-        if hasRunningActivity { return .blue }
-        if activities.contains(where: { $0.status == .failed }) { return .red }
-        return .green
+        return nil
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.22)) {
-                    isExpanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: hasRunningActivity ? "circle.dotted" : "hammer")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(summaryTint.opacity(0.8))
-                        .frame(width: 20, height: 20)
-                        .background {
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(summaryTint.opacity(0.1))
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(activities) { activity in
+                AgentActivityRowView(
+                    activity: activity,
+                    pendingPermission: permissionRequest(for: activity)
+                )
+                .background {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(colorScheme == .dark
+                            ? Color.agentPanelSurface.opacity(0.5)
+                            : Color.agentPanelElevatedSurface.opacity(0.92))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(Color.agentPanelSeparator.opacity(
+                                    colorScheme == .dark ? 0.28 : 0.36
+                                ))
                         }
-
-                    Text(summaryText)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentTransition(.numericText())
-
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-            }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(activities) { activity in
-                        AgentActivityRowView(activity: activity)
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 8)
-                .transition(.opacity.combined(with: .blurReplace))
+                .transition(.opacity.animation(.easeIn(duration: 0.20)))
             }
         }
+        .animation(.default, value: activities.map(\.id))
+        .animation(.spring(duration: 0.28, bounce: 0.1), value: pendingPermissionRequests.map(\.id))
+    }
+}
+
+private struct AgentPermissionRequestView: View {
+    let request: AgentPermissionRequest
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "lock.shield")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.orange.opacity(0.9))
+                    .frame(width: 20, height: 20)
+                    .background {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(.orange.opacity(0.12))
+                    }
+                Text("Permission Required")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+            }
+
+            if let message = request.message, !message.isEmpty {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 6) {
+                ForEach(request.options, id: \.id) { option in
+                    Button(option.name) {
+                        request.resolve(.select(optionID: option.id))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                Button("Cancel") {
+                    request.resolve(.cancel)
+                }
+                .buttonStyle(.plain)
+                .controlSize(.small)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(colorScheme == .dark ? Color.agentPanelSurface.opacity(0.55) : Color.agentPanelElevatedSurface.opacity(0.95))
+                .fill(.orange.opacity(colorScheme == .dark ? 0.08 : 0.06))
                 .overlay {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Color.agentPanelSeparator.opacity(colorScheme == .dark ? 0.35 : 0.42))
+                        .strokeBorder(.orange.opacity(colorScheme == .dark ? 0.22 : 0.18))
                 }
         }
-        .animation(.easeInOut(duration: 0.28), value: summaryText)
     }
 }
 
@@ -1072,7 +1424,10 @@ private struct AgentStreamingAssistantTextView: View {
     @State private var animationStartedAt: Date?
 
     private let debounceNs: UInt64 = 70_000_000  // 70 ms
-    private let animDuration: Double = 0.5
+    private let charFadeDuration: Double = 0.35
+    private let maxStaggerGap: Double = 0.05     // max delay between consecutive chars
+    private let maxStaggerSpread: Double = 0.40  // total stagger never exceeds this
+    @State private var currentBatchDuration: Double = 0.5
 
     var body: some View {
         Group {
@@ -1120,64 +1475,66 @@ private struct AgentStreamingAssistantTextView: View {
 
     @ViewBuilder
     private func animatedBlurText(at date: Date) -> some View {
-        let progress = visualProgress(at: date)
-        let easedProgress = easedVisualProgress(at: date)
+        if let animationStartedAt {
+            let elapsed = date.timeIntervalSince(animationStartedAt)
+            // Quick global blur that fades out in the first 0.15s for a soft appearance.
+            let blur = CGFloat(5 * max(0, 1 - elapsed / 0.15))
+            // Overall lift offset follows the full batch progress.
+            let overallProgress = min(1.0, elapsed / currentBatchDuration)
+            let easedOverall = 1 - pow(1 - overallProgress, 3)
+            let lift = CGFloat(5 * (1 - easedOverall))
 
-        ZStack(alignment: .topLeading) {
-            Text(stableLayerAttributedString())
+            ZStack(alignment: .topLeading) {
+                // Layer 1: stable text visible, suffix as transparent placeholder for layout.
+                Text(stableLayerAttributedString())
 
-            Text(animatedLayerAttributedString())
-                .compositingGroup()
-                .blur(radius: blurRadius(for: progress))
-                .opacity(animatedLayerOpacity(for: easedProgress))
-                .offset(y: verticalLiftOffset(for: easedProgress))
+                // Layer 2: stable hidden, suffix with per-character staggered opacity.
+                Text(staggeredSuffixAttributedString(elapsed: elapsed))
+                    .blur(radius: blur)
+                    .offset(y: lift)
+            }
+        } else {
+            Text(stableContent + animatedSuffix)
         }
     }
 
-    private func visualProgress(at date: Date) -> Double {
-        guard isAnimatingBatch, !animatedSuffix.isEmpty, let animationStartedAt else {
-            return 1
+    private func staggeredSuffixAttributedString(elapsed: Double) -> AttributedString {
+        var result = AttributedString(stableContent)
+        result.foregroundColor = .clear
+
+        let chars = Array(animatedSuffix)
+        let gap = staggerGap(for: chars.count)
+
+        for (i, char) in chars.enumerated() {
+            let charElapsed = max(0, elapsed - Double(i) * gap)
+            let rawProgress = min(1.0, charElapsed / charFadeDuration)
+            let easedProgress = 1 - pow(1 - rawProgress, 3)
+
+            var attr = AttributedString(String(char))
+            attr.foregroundColor = Color.primary.opacity(0.96 * easedProgress)
+            result.append(attr)
         }
 
-        let elapsed = date.timeIntervalSince(animationStartedAt)
-        return max(0, min(1, elapsed / animDuration))
-    }
-
-    private func easedVisualProgress(at date: Date) -> Double {
-        let progress = visualProgress(at: date)
-        return 1 - pow(1 - progress, 3)
+        return result
     }
 
     private func stableLayerAttributedString() -> AttributedString {
         var result = AttributedString(stableContent)
         guard !animatedSuffix.isEmpty else { return result }
-
         var hiddenSuffix = AttributedString(animatedSuffix)
         hiddenSuffix.foregroundColor = .clear
         result.append(hiddenSuffix)
         return result
     }
 
-    private func animatedLayerAttributedString() -> AttributedString {
-        var hiddenStable = AttributedString(stableContent)
-        hiddenStable.foregroundColor = .clear
-
-        var visibleSuffix = AttributedString(animatedSuffix)
-        visibleSuffix.foregroundColor = .primary
-        hiddenStable.append(visibleSuffix)
-        return hiddenStable
+    private func staggerGap(for count: Int) -> Double {
+        guard count > 1 else { return 0 }
+        return min(maxStaggerGap, maxStaggerSpread / Double(count - 1))
     }
 
-    private func blurRadius(for progress: Double) -> CGFloat {
-        CGFloat(8 * (1 - max(0, min(1, progress))))
-    }
-
-    private func animatedLayerOpacity(for easedProgress: Double) -> Double {
-        0.1 + (0.9 * max(0, min(1, easedProgress)))
-    }
-
-    private func verticalLiftOffset(for easedProgress: Double) -> CGFloat {
-        CGFloat(6 * (1 - max(0, min(1, easedProgress))))
+    private func totalBatchDuration(for count: Int) -> Double {
+        let spread = staggerGap(for: count) * Double(max(0, count - 1))
+        return spread + charFadeDuration
     }
 
     private func schedule(_ new: String) {
@@ -1233,6 +1590,7 @@ private struct AgentStreamingAssistantTextView: View {
         }
 
         animatedSuffix = batch.text
+        currentBatchDuration = totalBatchDuration(for: batch.text.count)
         isAnimatingBatch = true
         animationStartedAt = Date()
         scheduleAnimationCompletion()
@@ -1241,7 +1599,7 @@ private struct AgentStreamingAssistantTextView: View {
     private func scheduleAnimationCompletion() {
         animationCompletionTask?.cancel()
         animationCompletionTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64(animDuration * 1_000_000_000))
+            try? await Task.sleep(nanoseconds: UInt64(currentBatchDuration * 1_000_000_000))
             guard !Task.isCancelled else { return }
             completeCurrentAnimation()
         }
@@ -1287,6 +1645,38 @@ private struct AgentStreamingAssistantTextView: View {
         targetContent = new
         isAnimatingBatch = false
         animationStartedAt = nil
+    }
+}
+
+private enum AgentFileSearcher {
+    static let ignoredDirectories: Set<String> = [
+        "node_modules", ".git", ".build", "DerivedData", "Pods", ".hg", ".svn",
+        "__pycache__", ".mypy_cache", "dist", "build", ".next", ".nuxt"
+    ]
+
+    nonisolated static func search(query: String, in directory: URL, limit: Int = 10) -> [URL] {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else { return [] }
+
+        let q = query.lowercased()
+        var results: [URL] = []
+
+        for case let url as URL in enumerator {
+            let name = url.lastPathComponent
+            if ignoredDirectories.contains(name) {
+                enumerator.skipDescendants()
+                continue
+            }
+            if q.isEmpty || name.lowercased().contains(q) || url.path.lowercased().contains(q) {
+                results.append(url)
+                if results.count >= limit { break }
+            }
+        }
+        return results
     }
 }
 
@@ -1499,40 +1889,212 @@ private struct AgentInfoBadge: View {
 
 private struct AgentActivityRowView: View {
     let activity: AgentActivity
+    var pendingPermission: AgentPermissionRequest? = nil
+
+    @State private var isExpanded = false
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: activity.kind.systemImage)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(statusTint)
-                .frame(width: 20, height: 20)
-                .background {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(statusTint.opacity(0.12))
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.spring(duration: 0.30, bounce: 0.06)) {
+                    isExpanded.toggle()
                 }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: activityIcon)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(statusTint)
+                        .frame(width: 20, height: 20)
+                        .background {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(statusTint.opacity(0.12))
+                        }
 
-            Text(activity.title)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.primary.opacity(0.82))
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                    Text(activity.title)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.primary.opacity(0.82))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-            AgentInfoBadge(title: activity.status.label, tint: statusTint)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary.opacity(0.5))
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .animation(.spring(duration: 0.24, bounce: 0.1), value: isExpanded)
+
+                    AgentInfoBadge(title: activity.status.label, tint: statusTint)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                Divider()
+                    .padding(.horizontal, 10)
+                    .transition(.asymmetric(
+                        insertion: .opacity.animation(.easeIn(duration: 0.14).delay(0.18)),
+                        removal: .opacity.animation(.easeOut(duration: 0.10))
+                    ))
+                AgentActivityDetailView(activity: activity)
+                    .padding(10)
+                    .transition(.asymmetric(
+                        insertion: .opacity.animation(.easeIn(duration: 0.18).delay(0.20)),
+                        removal: .opacity.animation(.easeOut(duration: 0.12))
+                    ))
+            }
+
+            if let request = pendingPermission {
+                Divider()
+                    .padding(.horizontal, 10)
+                    .transition(.asymmetric(
+                        insertion: .opacity.animation(.easeIn(duration: 0.16).delay(0.20)),
+                        removal: .opacity.animation(.easeOut(duration: 0.12))
+                    ))
+                AgentPermissionInlineView(request: request)
+                    .padding(10)
+                    .transition(.asymmetric(
+                        insertion: .opacity.animation(.easeIn(duration: 0.20).delay(0.22)),
+                        removal: .opacity.animation(.easeOut(duration: 0.14))
+                    ))
+            }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
+        .animation(.spring(duration: 0.30, bounce: 0.06), value: pendingPermission?.id)
+    }
+
+    private var activityIcon: String {
+        if activity.kind != .tool {
+            return activity.kind.systemImage
+        }
+        switch activity.toolKind {
+        case "read":             return "doc.text"
+        case "edit":             return "pencil"
+        case "delete":           return "trash"
+        case "move":             return "arrow.right.doc.on.clipboard"
+        case "search":           return "magnifyingglass"
+        case "execute":          return "terminal"
+        case "think":            return "brain"
+        case "fetch":            return "arrow.down.circle"
+        case "switch_mode":      return "arrow.left.arrow.right"
+        case "plan":             return "list.bullet.clipboard"
+        case "exit_plan_mode":   return "checkmark.circle"
+        default:                 return "wrench.and.screwdriver"
+        }
     }
 
     private var statusTint: Color {
         switch activity.status {
-        case .running:
-            return .blue
-        case .completed:
-            return .green
-        case .failed:
-            return .red
-        case .info:
-            return .secondary
+        case .running: return .blue
+        case .completed: return .green
+        case .failed: return .red
+        case .info: return .secondary
+        }
+    }
+}
+
+private struct AgentActivityDetailView: View {
+    let activity: AgentActivity
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var hasAnyDetail: Bool {
+        activity.command != nil || activity.output != nil || (activity.detail != nil && !activity.detail!.isEmpty)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let command = activity.command {
+                detailSection(label: "Command") {
+                    Text(command)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.primary.opacity(0.85))
+                        .textSelection(.enabled)
+                        .lineLimit(6)
+                }
+            }
+
+            if let output = activity.output, !output.isEmpty {
+                detailSection(label: "Output") {
+                    ScrollView(.vertical) {
+                        Text(output)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.primary.opacity(0.82))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 200)
+                    .background {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(colorScheme == .dark
+                                ? Color.black.opacity(0.25)
+                                : Color.black.opacity(0.04))
+                    }
+                }
+            }
+
+            if let detail = activity.detail, !detail.isEmpty {
+                detailSection(label: "Info") {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if !hasAnyDetail {
+                Text("No additional details available.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func detailSection(label: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+            content()
+        }
+    }
+}
+
+private struct AgentPermissionInlineView: View {
+    let request: AgentPermissionRequest
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "lock.shield")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.orange.opacity(0.9))
+                Text("Permission Required")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange.opacity(0.9))
+            }
+
+            if let message = request.message, !message.isEmpty {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 6) {
+                ForEach(request.options, id: \.id) { option in
+                    Button(option.name) {
+                        request.resolve(.select(optionID: option.id))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                Button("Cancel") {
+                    request.resolve(.cancel)
+                }
+                .buttonStyle(.plain)
+                .controlSize(.small)
+                .foregroundStyle(.secondary)
+            }
         }
     }
 }

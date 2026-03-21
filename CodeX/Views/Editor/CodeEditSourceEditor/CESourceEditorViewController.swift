@@ -248,10 +248,20 @@ class CESourceEditorViewController: NSViewController {
         case .info: ceSeverity = .info
         case .hint: ceSeverity = .hint
         }
+        let ceSource: CodeEditSourceEditor.DiagnosticSource
+        switch diag.source {
+        case .typescript(let code):    ceSource = .typescript(code: code)
+        case .eslint(let rule):        ceSource = .eslint(rule: rule)
+        case .biomeLint(let rule):     ceSource = .biomeLint(rule: rule)
+        case .biomeFormat:             ceSource = .biomeFormat
+        case .lsp(let s, let code):    ceSource = .lsp(source: s, code: code)
+        case .unknown:                 ceSource = .unknown
+        }
         return CodeEditSourceEditor.Diagnostic(
             range: diag.range,
             severity: ceSeverity,
-            message: diag.message
+            message: diag.message,
+            source: ceSource
         )
     }
 
