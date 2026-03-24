@@ -50,7 +50,8 @@
       "Bash(grep -E \"\\\\.swift$\")",
       "Bash(wc -l /Users/syuro/Workspace/PERSONAL/CodeX/CodeX/ViewModels/*.swift)",
       "Bash(grep -r 'class TextView' /Users/syuro/Workspace/PERSONAL/CodeX/Packages/CodeEditSourceEditor/Sources --include=*.swift -l)",
-      "mcp__ide__getDiagnostics"
+      "mcp__ide__getDiagnostics",
+      "Bash(find /Users/syuro/Workspace/PERSONAL/CodeX -maxdepth 2 -name *.yml -o -name *.yaml -o -name Makefile -o -name makefile)"
     ]
   }
 }
