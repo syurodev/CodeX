@@ -7,6 +7,7 @@
 
 import AppKit
 import CodeEditSourceEditor
+import CodeEditTextView
 import CodeEditLanguages
 
 /// Wrapper around CodeEditSourceEditor's TextViewController
@@ -117,20 +118,57 @@ class CESourceEditorViewController: NSViewController {
             name: Notification.Name("com.CodeEdit.TextView.TextDidChangeNotification"),
             object: textViewController.textView
         )
-        
+
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(cursorDidUpdate),
             name: TextViewController.cursorPositionUpdatedNotification,
             object: textViewController
         )
-        
+
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(scrollDidUpdate),
             name: TextViewController.scrollPositionDidUpdateNotification,
             object: textViewController
         )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleFlashSymbol(_:)),
+            name: Notification.Name("CodeX.FlashSymbolRange"),
+            object: nil
+        )
+    }
+
+    @objc private func handleFlashSymbol(_ notification: Notification) {
+        guard let info = notification.userInfo,
+              let line   = info["line"]   as? Int,
+              let column = info["column"] as? Int,
+              let length = info["length"] as? Int else { return }
+
+        let text  = textViewController.text
+        let lines = text.components(separatedBy: "\n")
+
+        var offset = 0
+        for i in 0..<min(line, lines.count) {
+            offset += (lines[i] as NSString).length + 1 // +1 for \n
+        }
+        offset += column
+
+        let nsRange = NSRange(location: offset, length: length)
+        let fullLength = (text as NSString).length
+        guard nsRange.location != NSNotFound,
+              nsRange.location + nsRange.length <= fullLength else { return }
+
+        let emphasis = Emphasis(
+            range: nsRange,
+            style: .standard,
+            flash: true,
+            inactive: false,
+            selectInDocument: true
+        )
+        textViewController.textView.emphasisManager?.addEmphasis(emphasis, for: "symbolJump")
     }
 
     @objc private func cursorDidUpdate(_ notification: Notification) {
@@ -138,7 +176,7 @@ class CESourceEditorViewController: NSViewController {
         let newPositions = cePositions.map { pos in
             CodeX.CursorPosition(line: pos.start.line, column: pos.start.column)
         }
-        
+
         if editorState.cursorPositions != newPositions {
             editorState.cursorPositions = newPositions
             onStateChange?(editorState)
@@ -179,23 +217,42 @@ class CESourceEditorViewController: NSViewController {
     
     func updateEditorState(_ state: EditorState) {
         editorState = state
-        
+
         // Update cursors if they differ
         let currentPositions = textViewController.cursorPositions.map {
             CodeX.CursorPosition(line: $0.start.line, column: $0.start.column)
         }
-        
+        let currentScroll = textViewController.scrollView.contentView.bounds.origin
+
         if currentPositions != state.cursorPositions {
             let newCEPositions = state.cursorPositions.map {
                 CodeEditSourceEditor.CursorPosition(line: $0.line, column: $0.column)
             }
-            textViewController.setCursorPositions(newCEPositions)
-        }
-        
-        // Update scroll if it differs
-        if textViewController.scrollView.contentView.bounds.origin != state.scrollPosition {
+            // Set cursor without scrollToVisible — scrollSelectionToVisible() is broken for
+            // unrendered lines (selection.boundingRect stays .zero → while-loop exits immediately).
+            textViewController.setCursorPositions(newCEPositions, scrollToVisible: false)
+
+            // Scroll via scrollToRange which uses layoutManager.rectForOffset and forces layout
+            if let target = state.cursorPositions.first {
+                let offset = characterOffset(line: target.line, column: target.column)
+                textViewController.textView.scrollToRange(NSRange(location: offset, length: 0), center: true)
+            }
+        } else if currentScroll != state.scrollPosition {
+            // Only restore saved scroll position when cursor hasn't changed (e.g. tab switch)
             textViewController.scrollView.contentView.scroll(state.scrollPosition)
         }
+    }
+
+    /// Computes the UTF-16 character offset for a 1-indexed line/column pair.
+    private func characterOffset(line: Int, column: Int) -> Int {
+        let text = textViewController.text as NSString
+        let lines = textViewController.text.components(separatedBy: "\n")
+        var offset = 0
+        for i in 0..<min(line - 1, lines.count) {
+            offset += (lines[i] as NSString).length + 1 // +1 for \n
+        }
+        offset += max(0, column - 1)
+        return min(offset, text.length)
     }
     
     func updateDiagnostics(_ newDiagnostics: [CodeX.Diagnostic]) {

@@ -82,6 +82,18 @@ struct CodeXApp: App {
             }
 
             CommandMenu("Editor") {
+                Button("Go to File…") {
+                    appViewModel.openQuickOpen()
+                }
+                .keyboardShortcut("p", modifiers: .command)
+
+                Button("Go to Symbol…") {
+                    appViewModel.openSymbolPicker()
+                }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+
+                Divider()
+
                 Button("Close Tab") {
                     if let currentID = appViewModel.editorViewModel.currentDocumentID {
                         appViewModel.editorViewModel.closeDocument(id: currentID)

@@ -13,13 +13,13 @@ struct TerminalTabBarView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 GlassEffectContainer(spacing: 6.0) {
                     HStack(spacing: 2) {
-                        // ── Run output tab (always first) ─────────────────────
-                        if let runItem = viewModel.runOutputItem {
+                        // ── Run output tabs (always first) ────────────────────
+                        ForEach(viewModel.runOutputItems) { runItem in
                             RunOutputTabItemView(
                                 item: runItem,
-                                isSelected: viewModel.isRunTabActive,
-                                onSelect: { viewModel.selectRunTab() },
-                                onClose:  { viewModel.closeRunTab() }
+                                isSelected: viewModel.activeRunTabID == runItem.id,
+                                onSelect: { viewModel.selectRunTab(id: runItem.id) },
+                                onClose:  { viewModel.closeRunTab(id: runItem.id) }
                             )
                             .glassEffectID(runItem.id, in: tabNamespace)
                             .glassEffectTransition(.matchedGeometry)

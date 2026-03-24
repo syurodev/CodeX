@@ -10,17 +10,12 @@ struct TerminalPanelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            dragHandle
-
-            Divider()
-
             TerminalTabBarView(
                 viewModel: viewModel,
                 onNewSession: onNewSession,
                 onClose: onClose
             )
-
-            Divider()
+            .overlay(alignment: .top) { dragHandle }
 
             terminalContent
         }
@@ -32,7 +27,7 @@ struct TerminalPanelView: View {
     private var dragHandle: some View {
         Color.clear
             .frame(maxWidth: .infinity)
-            .frame(height: 4)
+            .frame(height: 6)
             .contentShape(Rectangle())
             .onHover { hovering in
                 if hovering {
@@ -48,11 +43,6 @@ struct TerminalPanelView: View {
                         height = max(120, min(800, newHeight))
                     }
             )
-            .overlay(alignment: .top) {
-                Rectangle()
-                    .fill(.white.opacity(0.08))
-                    .frame(height: 1)
-            }
     }
 
     // MARK: - Terminal Content
@@ -70,14 +60,16 @@ struct TerminalPanelView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
-            if let runVM = runViewModel, viewModel.runOutputItem != nil {
-                RunOutputView(runViewModel: runVM)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .opacity(viewModel.isRunTabActive ? 1 : 0)
-                    .allowsHitTesting(viewModel.isRunTabActive)
+            if let runVM = runViewModel {
+                ForEach(viewModel.runOutputItems) { runItem in
+                    RunOutputView(runViewModel: runVM, scriptId: runItem.scriptId)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .opacity(viewModel.activeRunTabID == runItem.id ? 1 : 0)
+                        .allowsHitTesting(viewModel.activeRunTabID == runItem.id)
+                }
             }
 
-            if viewModel.sessions.isEmpty && !viewModel.isRunTabActive {
+            if viewModel.sessions.isEmpty && viewModel.runOutputItems.isEmpty {
                 emptyState
             }
         }

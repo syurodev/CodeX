@@ -1,8 +1,7 @@
 import Foundation
 
-// MARK: - RunState
+// MARK: - RunState (unchanged)
 
-/// Lifecycle states for the currently-running script process.
 enum RunState: Equatable {
     case idle
     case starting
@@ -16,13 +15,11 @@ enum RunState: Equatable {
         }
     }
 
-    /// The detected listening port, if any.
     var port: Int? {
         if case .running(_, let p) = self { return p }
         return nil
     }
 
-    /// Short status text for display in the toolbar.
     var statusLabel: String {
         switch self {
         case .idle:              return ""
@@ -41,141 +38,151 @@ final class ProjectRunViewModel {
 
     // MARK: Detected project info
     var detectedKind: DetectedProjectKind = .unknown
-    var selectedScript: RunScript?
+    var scriptGroups: [RunScriptGroup] = []
 
-    // MARK: Process state
-    var runState: RunState = .idle
-    /// Circular buffer of recent stdout/stderr lines (capped at 1 000).
+    // MARK: Per-script run state (key = script.id)
+    private(set) var scriptStates: [String: RunState] = [:]
+
+    // MARK: Aggregated output (for terminal panel)
     var outputLines: [String] = []
-    /// The most-recent non-empty output line — used in the toolbar subtitle.
     var lastOutputLine: String = ""
 
+    // MARK: Per-script output (key = script.id)
+    var perScriptOutputLines: [String: [String]] = [:]
+
     // MARK: Computed
-    var scripts: [RunScript] { detectedKind.scripts }
-    var hasScripts: Bool { !scripts.isEmpty }
+    var scripts: [RunScript] { scriptGroups.flatMap(\.scripts) }
+    var hasScripts: Bool { !scriptGroups.isEmpty }
+    var hasAnyRunning: Bool { scriptStates.values.contains { $0.isRunning } }
 
     // MARK: Callbacks
-    /// Called when the process exits naturally (not from an explicit `stop()` call).
     var onRunEnded: (() -> Void)?
+    var onScriptEnded: ((String) -> Void)?
 
-    // MARK: Private
+    // MARK: Private process handles (key = script.id)
+    private var processes: [String: Process] = [:]
+    private var outHandles: [String: FileHandle] = [:]
+    private var errHandles: [String: FileHandle] = [:]
     private var projectRoot: URL?
-    private var process: Process?
-    private var outHandle: FileHandle?
-    private var errHandle: FileHandle?
 
     // MARK: - Detect
 
-    /// Call this whenever the user opens a new project folder.
     func detect(in root: URL) {
-        stop()
+        stopAll()
         projectRoot = root
         outputLines.removeAll()
         lastOutputLine = ""
 
         let kind = ProjectScriptService.detect(in: root)
         detectedKind = kind
-        selectedScript = kind.scripts.first
+        scriptGroups = ProjectScriptService.detectGroups(in: root)
     }
 
     // MARK: - Run
 
-    /// Start the currently-selected script. No-op if already running.
-    func run() {
-        guard let script = selectedScript, let root = projectRoot else { return }
-        guard !runState.isRunning else { return }
+    func isRunning(_ script: RunScript) -> Bool {
+        scriptStates[script.id]?.isRunning ?? false
+    }
 
-        runState = .starting
+    func runState(for script: RunScript) -> RunState {
+        scriptStates[script.id] ?? .idle
+    }
+
+    func run(script: RunScript) {
+        let key = script.id
+        guard !(scriptStates[key]?.isRunning ?? false) else { return }
+
+        scriptStates[key] = .starting
         outputLines.removeAll()
         lastOutputLine = ""
+        perScriptOutputLines[key] = []
 
         let proc = Process()
         let outPipe = Pipe()
         let errPipe = Pipe()
 
-        // Use login shell so PATH includes nvm / brew / bun / etc.
-        proc.executableURL      = URL(fileURLWithPath: "/bin/zsh")
-        proc.arguments          = ["-l", "-c", script.command]
-        proc.currentDirectoryURL = root
-        proc.standardOutput     = outPipe
-        proc.standardError      = errPipe
+        proc.executableURL       = URL(fileURLWithPath: "/bin/zsh")
+        proc.arguments           = ["-l", "-c", script.command]
+        proc.currentDirectoryURL = script.workingDirectory
+        proc.standardOutput      = outPipe
+        proc.standardError       = errPipe
 
-        // Inherit environment + disable terminal colour codes
         var env = ProcessInfo.processInfo.environment
-        env["TERM"] = "dumb"
+        env["TERM"]     = "dumb"
         env["NO_COLOR"] = "1"
 
-        // GUI apps on macOS only receive a minimal PATH from launchd.
-        // Prepend well-known user tool directories so bun / deno / nvm / cargo / brew
-        // are found even when the shell profile hasn't been sourced.
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let extraPaths: [String] = [
-            "\(home)/.bun/bin",                 // bun
-            "\(home)/.deno/bin",                // deno
-            "\(home)/.cargo/bin",               // rust / cargo
-            "\(home)/.local/bin",               // pip --user, pipx, etc.
-            "\(home)/.npm-global/bin",          // npm global (--prefix ~/.npm-global)
-            "\(home)/go/bin",                   // go install
-            "\(home)/.volta/bin",               // volta
-            "\(home)/.nvm/versions/node/current/bin",  // nvm current (symlink)
-            "/opt/homebrew/bin",                // homebrew (Apple Silicon)
+            "\(home)/.bun/bin",
+            "\(home)/.deno/bin",
+            "\(home)/.cargo/bin",
+            "\(home)/.local/bin",
+            "\(home)/.npm-global/bin",
+            "\(home)/go/bin",
+            "\(home)/.volta/bin",
+            "\(home)/.nvm/versions/node/current/bin",
+            "/opt/homebrew/bin",
             "/opt/homebrew/sbin",
-            "/usr/local/bin",                   // homebrew (Intel) + misc
+            "/usr/local/bin",
             "/usr/local/sbin",
         ]
         let currentPath = env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
         env["PATH"] = extraPaths.joined(separator: ":") + ":" + currentPath
-
         proc.environment = env
 
-        process   = proc
-        outHandle = outPipe.fileHandleForReading
-        errHandle = errPipe.fileHandleForReading
+        processes[key]  = proc
+        outHandles[key] = outPipe.fileHandleForReading
+        errHandles[key] = errPipe.fileHandleForReading
 
-        // stdout
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] fh in
             let data = fh.availableData
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-            DispatchQueue.main.async { self?.ingest(text) }
+            DispatchQueue.main.async { self?.ingest(text, key: key) }
         }
-
-        // stderr
         errPipe.fileHandleForReading.readabilityHandler = { [weak self] fh in
             let data = fh.availableData
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-            DispatchQueue.main.async { self?.ingest(text) }
+            DispatchQueue.main.async { self?.ingest(text, key: key) }
         }
 
         proc.terminationHandler = { [weak self] p in
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                self.cleanupHandles()
-                guard !self.runState.isRunning else {
-                    // Process exited while we still considered it running
-                    let code = p.terminationStatus
-                    self.runState = code == 0 ? .idle : .error("Exited \(code)")
-                    self.onRunEnded?()   // notify observers (e.g. panel tab alive indicator)
-                    return
-                }
+                self.cleanupHandles(key: key)
+                guard self.scriptStates[key]?.isRunning == true else { return }
+                let code = p.terminationStatus
+                self.scriptStates[key] = code == 0 ? .idle : .error("Exited \(code)")
+                self.onScriptEnded?(key)
+                if !self.hasAnyRunning { self.onRunEnded?() }
             }
         }
 
         do {
             try proc.run()
-            runState = .running(pid: proc.processIdentifier, port: nil)
+            scriptStates[key] = .running(pid: proc.processIdentifier, port: nil)
         } catch {
-            runState = .error(error.localizedDescription)
-            cleanupHandles()
+            scriptStates[key] = .error(error.localizedDescription)
+            cleanupHandles(key: key)
         }
     }
 
     // MARK: - Stop
 
-    func stop() {
-        guard runState.isRunning else { return }
-        process?.terminate()
-        cleanupHandles()
-        runState = .idle
+    func stop(script: RunScript) {
+        let key = script.id
+        processes[key]?.terminate()
+        cleanupHandles(key: key)
+        scriptStates[key] = .idle
+        if !hasAnyRunning { onRunEnded?() }
+    }
+
+    func stopAll() {
+        for key in processes.keys {
+            processes[key]?.terminate()
+            cleanupHandles(key: key)
+        }
+        scriptStates = [:]
+        onRunEnded?()
     }
 
     // MARK: - Clear
@@ -183,14 +190,17 @@ final class ProjectRunViewModel {
     func clearOutput() {
         outputLines.removeAll()
         lastOutputLine = ""
+        perScriptOutputLines.removeAll()
+    }
+
+    func clearOutput(for scriptId: String) {
+        perScriptOutputLines[scriptId] = []
     }
 
     // MARK: - Output ingestion
 
-    private func ingest(_ raw: String) {
-        // Strip ANSI escape sequences
+    private func ingest(_ raw: String, key: String) {
         let stripped = stripAnsi(raw)
-
         let incoming = stripped
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .controlCharacters) }
@@ -200,15 +210,18 @@ final class ProjectRunViewModel {
         if outputLines.count > 1_000 { outputLines.removeFirst(outputLines.count - 1_000) }
         if let last = incoming.last { lastOutputLine = last }
 
-        // Port detection: update once we have a concrete port
-        if case .running(let pid, nil) = runState, let port = detectPort(in: stripped) {
-            runState = .running(pid: pid, port: port)
+        perScriptOutputLines[key, default: []].append(contentsOf: incoming)
+        let perCount = perScriptOutputLines[key]?.count ?? 0
+        if perCount > 1_000 {
+            perScriptOutputLines[key]?.removeFirst(perCount - 1_000)
         }
 
-        // Transition starting → running on first output
-        if case .starting = runState {
-            let pid = process?.processIdentifier ?? 0
-            runState = .running(pid: pid, port: detectPort(in: stripped))
+        if case .running(let pid, nil) = scriptStates[key], let port = detectPort(in: stripped) {
+            scriptStates[key] = .running(pid: pid, port: port)
+        }
+        if case .starting = scriptStates[key] {
+            let pid = processes[key]?.processIdentifier ?? 0
+            scriptStates[key] = .running(pid: pid, port: detectPort(in: stripped))
         }
     }
 
@@ -216,12 +229,12 @@ final class ProjectRunViewModel {
 
     private func detectPort(in text: String) -> Int? {
         let patterns = [
-            #"(?:port|PORT)[:\s]+(\d{4,5})"#,          // "port 3000", "PORT: 8080"
-            #"https?://[^\s:]+:(\d{4,5})"#,            // "http://localhost:3000"
-            #"localhost:(\d{4,5})"#,                    // "localhost:5173"
-            #"127\.0\.0\.1:(\d{4,5})"#,                // "127.0.0.1:4000"
-            #"0\.0\.0\.0:(\d{4,5})"#,                  // "0.0.0.0:8000"
-            #":::(\d{4,5})"#,                           // ":::3000"
+            #"(?:port|PORT)[:\s]+(\d{4,5})"#,
+            #"https?://[^\s:]+:(\d{4,5})"#,
+            #"localhost:(\d{4,5})"#,
+            #"127\.0\.0\.1:(\d{4,5})"#,
+            #"0\.0\.0\.0:(\d{4,5})"#,
+            #":::(\d{4,5})"#,
         ]
         for pattern in patterns {
             guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { continue }
@@ -247,12 +260,11 @@ final class ProjectRunViewModel {
 
     // MARK: - Cleanup
 
-    private func cleanupHandles() {
-        outHandle?.readabilityHandler = nil
-        errHandle?.readabilityHandler = nil
-        outHandle = nil
-        errHandle = nil
-        process   = nil
+    private func cleanupHandles(key: String) {
+        outHandles[key]?.readabilityHandler = nil
+        errHandles[key]?.readabilityHandler = nil
+        outHandles.removeValue(forKey: key)
+        errHandles.removeValue(forKey: key)
+        processes.removeValue(forKey: key)
     }
-
 }

@@ -32,6 +32,10 @@ class AppViewModel {
     var selectedSidebarTab: SidebarTab = .explorer
     var splitViewVisibility: NavigationSplitViewVisibility = .all
     var isAgentInspectorPresented = false
+    var isQuickOpenPresented = false
+    var quickOpenViewModel = QuickOpenViewModel()
+    var isSymbolPickerPresented = false
+    var symbolPickerViewModel = SymbolPickerViewModel()
 
     private let fileSystemService = FileSystemService()
     private let gitService = GitService()
@@ -61,26 +65,37 @@ class AppViewModel {
     /// Wire `ProjectRunViewModel` events → terminal panel updates.
     private func setupRunCallbacks() {
         projectRunViewModel.onRunEnded = { [weak self] in
-            self?.terminalPanelViewModel.updateRunTabAlive(false)
+            self?.terminalPanelViewModel.updateAllRunTabsAlive(false)
+        }
+        projectRunViewModel.onScriptEnded = { [weak self] scriptId in
+            self?.terminalPanelViewModel.updateRunTabAlive(scriptId: scriptId, alive: false)
         }
     }
 
-    /// Open the run output tab, show the panel, then start the process.
-    func startRun() {
-        guard let script = projectRunViewModel.selectedScript else { return }
-        terminalPanelViewModel.openRunTab(title: script.name)
+    private var scriptGroups: [RunScriptGroup] { projectRunViewModel.scriptGroups }
+
+    /// Run a script from the popover. Opens the terminal panel and starts the process.
+    func run(script: RunScript, groupName: String) {
+        let title = scriptGroups.count > 1 ? "\(groupName): \(script.name)" : script.name
+        terminalPanelViewModel.openRunTab(scriptId: script.id, title: title)
         if !isTerminalPanelPresented {
             withAnimation(.easeInOut(duration: 0.2)) {
                 isTerminalPanelPresented = true
             }
         }
-        projectRunViewModel.run()
+        projectRunViewModel.run(script: script)
     }
 
-    /// Stop the running process and mark the tab as ended.
-    func stopRun() {
-        projectRunViewModel.stop()
-        terminalPanelViewModel.updateRunTabAlive(false)
+    /// Stop a single running script.
+    func stopScript(_ script: RunScript) {
+        projectRunViewModel.stop(script: script)
+        terminalPanelViewModel.updateRunTabAlive(scriptId: script.id, alive: false)
+    }
+
+    /// Stop all running scripts.
+    func stopAllScripts() {
+        projectRunViewModel.stopAll()
+        terminalPanelViewModel.updateAllRunTabsAlive(false)
     }
 
     /// Sync custom tool paths from ToolsSettings into the format services.
@@ -206,6 +221,51 @@ class AppViewModel {
         isAgentInspectorPresented.toggle()
     }
 
+    func openQuickOpen() {
+        guard project != nil else { return }
+        quickOpenViewModel.reset()
+        if let rootURL = project?.rootURL {
+            quickOpenViewModel.load(projectRoot: rootURL)
+        }
+        isQuickOpenPresented = true
+    }
+
+    func quickOpen_selectFile(_ url: URL) {
+        editorViewModel.openDocument(from: url, projectRoot: project?.rootURL, using: fileSystemService)
+        isQuickOpenPresented = false
+    }
+
+    func openSymbolPicker() {
+        guard let doc = editorViewModel.currentDocument else { return }
+        symbolPickerViewModel.reset()
+        symbolPickerViewModel.load(from: doc)
+        isSymbolPickerPresented = true
+        // Trigger fresh LSP fetch — symbols update tự động qua onChange trong view
+        if let root = project?.rootURL {
+            doc.fetchSymbolsIfSupported(projectRoot: root)
+        }
+    }
+
+    func symbolPicker_reloadIfNeeded() {
+        guard isSymbolPickerPresented, let doc = editorViewModel.currentDocument else { return }
+        symbolPickerViewModel.load(from: doc)
+    }
+
+    func symbolPicker_jumpTo(item: SymbolPickerViewModel.SymbolItem) {
+        // LSP is 0-indexed, CursorPosition is 1-indexed
+        editorViewModel.editorState.cursorPositions = [CursorPosition(line: item.line + 1, column: item.column + 1)]
+        isSymbolPickerPresented = false
+
+        // Flash the symbol after picker dismiss animation completes
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            NotificationCenter.default.post(
+                name: .init("CodeX.FlashSymbolRange"),
+                object: nil,
+                userInfo: ["line": item.line, "column": item.column, "length": item.name.count]
+            )
+        }
+    }
+
     func shutdownAgentRuntimes() {
         agentPanelViewModel.shutdownAllRuntimes()
     }
@@ -292,7 +352,7 @@ class AppViewModel {
         MainActor.assumeIsolated {
             shutdownAgentRuntimes()
             terminalPanelViewModel.killAll()
-            projectRunViewModel.stop()
+            projectRunViewModel.stopAll()
         }
     }
 }

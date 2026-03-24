@@ -12,10 +12,6 @@ struct MainWindowToolbarContent: ToolbarContent {
             ToolbarRunView(appViewModel: appViewModel)
         }
 
-        ToolbarItem(placement: .primaryAction) {
-            ToolbarDiagnosticsButton(appViewModel: appViewModel)
-        }
-
         if !appViewModel.isAgentInspectorPresented {
             ToolbarItem(placement: .primaryAction) {
                 ToolbarAgentPanelButton(appViewModel: appViewModel)

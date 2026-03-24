@@ -2,10 +2,11 @@ import Foundation
 
 // MARK: - Run output tab model
 
-/// Lightweight descriptor for the pinned "run output" tab.
+/// Lightweight descriptor for a pinned "run output" tab.
 /// The actual output content lives in `ProjectRunViewModel`.
 struct RunOutputTabModel: Identifiable {
     let id = UUID()
+    let scriptId: String   // links to ProjectRunViewModel.perScriptOutputLines key
     var title: String
     /// `false` once the process exits (tab stays visible but icon changes).
     var isAlive: Bool
@@ -19,10 +20,17 @@ final class TerminalPanelViewModel {
     var sessions: [TerminalSessionViewModel] = []
     var activeSessionID: UUID?
 
-    // Run output tab — always rendered first in the tab bar
-    var runOutputItem: RunOutputTabModel? = nil
-    /// When `true`, the run output view is shown instead of a terminal session.
-    var isRunTabActive: Bool = false
+    // Run output tabs — always rendered first in the tab bar
+    var runOutputItems: [RunOutputTabModel] = []
+    var activeRunTabID: UUID? = nil
+
+    /// `true` when a run tab is the active pane.
+    var isRunTabActive: Bool { activeRunTabID != nil }
+
+    /// The currently active run tab item, if any.
+    var activeRunItem: RunOutputTabModel? {
+        runOutputItems.first { $0.id == activeRunTabID }
+    }
 
     private let terminalService: TerminalService
 
@@ -45,7 +53,7 @@ final class TerminalPanelViewModel {
         let session = TerminalSessionViewModel(title: nextTitle(), config: config)
         sessions.append(session)
         activeSessionID = session.id
-        isRunTabActive = false   // switch away from run tab
+        activeRunTabID = nil   // switch away from run tab
     }
 
     func closeSession(id: UUID) {
@@ -55,8 +63,7 @@ final class TerminalPanelViewModel {
 
         if sessions.isEmpty {
             activeSessionID = nil
-            // Fall back to run tab if it exists, otherwise nothing
-            isRunTabActive = runOutputItem != nil
+            activeRunTabID = runOutputItems.last?.id
             return
         }
 
@@ -68,36 +75,52 @@ final class TerminalPanelViewModel {
 
     func selectSession(id: UUID) {
         activeSessionID = id
-        isRunTabActive = false   // switch away from run tab
+        activeRunTabID = nil   // switch away from run tab
     }
 
     // MARK: - Run tab management
 
-    /// Create or refresh the run output tab and make it active.
-    func openRunTab(title: String) {
-        if runOutputItem == nil {
-            runOutputItem = RunOutputTabModel(title: title, isAlive: true)
+    /// Create or refresh the run output tab for the given script and make it active.
+    func openRunTab(scriptId: String, title: String) {
+        if let idx = runOutputItems.firstIndex(where: { $0.scriptId == scriptId }) {
+            runOutputItems[idx].title = title
+            runOutputItems[idx].isAlive = true
+            activeRunTabID = runOutputItems[idx].id
         } else {
-            runOutputItem?.title = title
-            runOutputItem?.isAlive = true
+            let item = RunOutputTabModel(scriptId: scriptId, title: title, isAlive: true)
+            runOutputItems.append(item)
+            activeRunTabID = item.id
         }
-        isRunTabActive = true
     }
 
-    /// Remove the run output tab entirely.
-    func closeRunTab() {
-        runOutputItem = nil
-        isRunTabActive = false
+    /// Remove a specific run output tab.
+    func closeRunTab(id: UUID) {
+        runOutputItems.removeAll { $0.id == id }
+        if activeRunTabID == id {
+            activeRunTabID = runOutputItems.last?.id
+            if activeRunTabID == nil, let first = sessions.first {
+                activeSessionID = first.id
+            }
+        }
     }
 
-    func selectRunTab() {
-        guard runOutputItem != nil else { return }
-        isRunTabActive = true
+    func selectRunTab(id: UUID) {
+        guard runOutputItems.contains(where: { $0.id == id }) else { return }
+        activeRunTabID = id
     }
 
-    /// Call when the process exits to update the tab's alive indicator.
-    func updateRunTabAlive(_ alive: Bool) {
-        runOutputItem?.isAlive = alive
+    /// Update the alive indicator for the run tab associated with a specific script.
+    func updateRunTabAlive(scriptId: String, alive: Bool) {
+        if let idx = runOutputItems.firstIndex(where: { $0.scriptId == scriptId }) {
+            runOutputItems[idx].isAlive = alive
+        }
+    }
+
+    /// Update the alive indicator for all run tabs.
+    func updateAllRunTabsAlive(_ alive: Bool) {
+        for i in runOutputItems.indices {
+            runOutputItems[i].isAlive = alive
+        }
     }
 
     func killAll() {
@@ -105,7 +128,7 @@ final class TerminalPanelViewModel {
         activeSessionID = nil
     }
 
-    /// Mở session mới tại thư mục của file đang chỉnh sửa (nếu có), fallback về project root.
+    /// Open a new session at the directory of the currently edited file, falling back to the project root.
     func newSessionAtCurrentFile(fileURL: URL?, projectRoot: URL?) {
         let directory = fileURL?.deletingLastPathComponent() ?? projectRoot
         newSession(workingDirectory: directory)

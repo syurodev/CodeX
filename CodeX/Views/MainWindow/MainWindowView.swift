@@ -121,6 +121,28 @@ struct MainWindowView: View {
                 }
         }
         .frame(minWidth: 800, minHeight: 500)
+        .overlay {
+            if appVM.isQuickOpenPresented {
+                QuickOpenView(
+                    viewModel: appVM.quickOpenViewModel,
+                    onSelect: { url in appVM.quickOpen_selectFile(url) },
+                    onDismiss: { appVM.isQuickOpenPresented = false }
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .top)))
+            } else if appVM.isSymbolPickerPresented {
+                SymbolPickerView(
+                    viewModel: appVM.symbolPickerViewModel,
+                    onSelect: { item in appVM.symbolPicker_jumpTo(item: item) },
+                    onDismiss: { appVM.isSymbolPickerPresented = false }
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .top)))
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: appVM.isQuickOpenPresented)
+        .animation(.easeOut(duration: 0.15), value: appVM.isSymbolPickerPresented)
+        .onChange(of: appVM.editorViewModel.currentDocument?.symbols) {
+            appVM.symbolPicker_reloadIfNeeded()
+        }
         .background {
             WindowTitlebarContent(id: "MainWindowTitlebarConfigurator") {
                 EmptyView()
